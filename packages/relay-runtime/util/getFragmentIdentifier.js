@@ -9,17 +9,21 @@
  * @emails oncall+relay
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const stableCopy = require('./stableCopy');
+import type {ReaderFragment} from './ReaderNode';
 
 const {
   getDataIDsFromFragment,
-  getVariablesFromFragment,
   getSelector,
+  getVariablesFromFragment,
 } = require('../store/RelayModernSelector');
-
-import type {ReaderFragment} from './ReaderNode';
+const isEmptyObject = require('./isEmptyObject');
+const RelayFeatureFlags = require('./RelayFeatureFlags');
+const stableCopy = require('./stableCopy');
+const {intern} = require('./StringInterner');
 
 function getFragmentIdentifier(
   fragmentNode: ReaderFragment,
@@ -36,15 +40,49 @@ function getFragmentIdentifier(
         ']';
   const fragmentVariables = getVariablesFromFragment(fragmentNode, fragmentRef);
   const dataIDs = getDataIDsFromFragment(fragmentNode, fragmentRef);
-  return (
-    fragmentOwnerIdentifier +
-    '/' +
-    fragmentNode.name +
-    '/' +
-    JSON.stringify(stableCopy(fragmentVariables)) +
-    '/' +
-    (JSON.stringify(dataIDs) ?? 'missing')
-  );
+
+  if (RelayFeatureFlags.ENABLE_GETFRAGMENTIDENTIFIER_OPTIMIZATION) {
+    let ids =
+      typeof dataIDs === 'undefined'
+        ? 'missing'
+        : dataIDs == null
+        ? 'null'
+        : Array.isArray(dataIDs)
+        ? '[' + dataIDs.join(',') + ']'
+        : dataIDs;
+    ids =
+      RelayFeatureFlags.STRING_INTERN_LEVEL <= 1
+        ? ids
+        : intern(ids, RelayFeatureFlags.MAX_DATA_ID_LENGTH);
+
+    return (
+      fragmentOwnerIdentifier +
+      '/' +
+      fragmentNode.name +
+      '/' +
+      (fragmentVariables == null || isEmptyObject(fragmentVariables)
+        ? '{}'
+        : JSON.stringify(stableCopy(fragmentVariables))) +
+      '/' +
+      ids
+    );
+  } else {
+    let ids = JSON.stringify(dataIDs) ?? 'missing';
+    ids =
+      RelayFeatureFlags.STRING_INTERN_LEVEL <= 1
+        ? ids
+        : intern(ids, RelayFeatureFlags.MAX_DATA_ID_LENGTH);
+
+    return (
+      fragmentOwnerIdentifier +
+      '/' +
+      fragmentNode.name +
+      '/' +
+      JSON.stringify(stableCopy(fragmentVariables)) +
+      '/' +
+      ids
+    );
+  }
 }
 
 module.exports = getFragmentIdentifier;

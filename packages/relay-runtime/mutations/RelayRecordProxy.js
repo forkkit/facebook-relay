@@ -8,18 +8,19 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
-
-const invariant = require('invariant');
-
-const {generateClientID} = require('../store/ClientID');
-const {getStableStorageKey} = require('../store/RelayStoreUtils');
 
 import type {RecordProxy} from '../store/RelayStoreTypes';
 import type {Arguments} from '../store/RelayStoreUtils';
 import type {DataID} from '../util/RelayRuntimeTypes';
 import type RelayRecordSourceMutator from './RelayRecordSourceMutator';
 import type RelayRecordSourceProxy from './RelayRecordSourceProxy';
+
+const {generateClientID} = require('../store/ClientID');
+const {getStableStorageKey} = require('../store/RelayStoreUtils');
+const invariant = require('invariant');
 
 /**
  * @internal
@@ -145,6 +146,10 @@ class RelayRecordProxy implements RecordProxy {
     const linkedIDs = records.map(record => record && record.getDataID());
     this._mutator.setLinkedRecordIDs(this._dataID, storageKey, linkedIDs);
     return this;
+  }
+
+  invalidateRecord(): void {
+    this._source.markIDForInvalidation(this._dataID);
   }
 }
 

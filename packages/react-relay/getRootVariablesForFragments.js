@@ -8,13 +8,15 @@
  * @format
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const {getSelector} = require('relay-runtime');
+'use strict';
 
 import type {FragmentMap, Variables} from 'relay-runtime';
 
-function getRootVariablesForFragments<TProps: {}>(
+const {getSelector} = require('relay-runtime');
+
+function getRootVariablesForFragments<TProps: {...}>(
   fragments: FragmentMap,
   props: TProps,
 ): Variables {
@@ -31,6 +33,7 @@ function getRootVariablesForFragments<TProps: {}>(
         ? selector.selectors[0]?.owner.variables ?? {}
         : selector?.owner.variables ?? {};
     rootVariables = {
+      // $FlowFixMe[exponential-spread]
       ...rootVariables,
       ...fragmentOwnerVariables,
     };

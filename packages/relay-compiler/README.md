@@ -1,23 +1,101 @@
 # Relay Compiler
 
-Relay-Compiler is a code-generation toolkit for GraphQL. It contains the core functionalities of GraphQL code-gen, including file parsing, validation, syntax tree parsing and transformation.
+Relay-Compiler is a code-generation toolkit for GraphQL. It contains the core
+functionalities of GraphQL code-gen, including file parsing, validation, syntax
+tree parsing and transformation.
 
-The GraphQL-Compiler package [exports library code](./GraphQLCompilerPublic.js) which you may use to find the modules you need, or to extend the compiler with your own custom input and output. Note, the internal APIs of the GraphQL-Compiler are under constant iteration, so rolling your own version may lead to incompatibilities with future releases.
+## Configuration in package.json
 
-The following graph illustrates the high-level architecture of a complete GraphQL code-generation pipeline:
+The simplest way to configure relay is to add a new `relay` section to your
+`package.json` that contains the relay config.
 
-![CodegenPipeline](https://github.com/facebook/relay/raw/master/packages/relay-compiler/docs/Architecture.png)
+At minimum, the relay config must specify where to find source files (i.e. files
+containing `graphql` literals) and the GraphQL schema for the project.
 
-To understand the underlying workflow of the core compilation step, which is what happens in the "GraphQL Compiler" block in the above graph, please refer [HERE](./ARCHITECTURE.md).
+```
+// adding new section to package json
+{
+  ...
+ "scripts": {
+    "relay": "relay-compiler"
+ },
+ ...
+ // relay configuration
+ "relay": {
+    "src": "./src",
+    "schema": "./src/schema/app_schema.graphql"
+  }
+}
+```
+Relay Compiler will automatically discover the config if:
 
-You can build your own version of the Compiler by adding your own `FileWriter`, and by swapping or adding a `FileParser` and additional `IRTransforms` (IR, which stands for `Intermediate Representation`, a special-purpose syntax tree format designed for transformability).
+- There is a `relay.config.json`, `relay.config.js`, `relay.config.cjs`
+or `relay.config.mjs` file at the root of the project (i.e. in the same folder
+as the `package.json` file).
+- There is a `.relayrc.json`, `.relayrc.js`, `.relayrc.cjs`, `.relayrc.mjs`
+or `.relayrc` file at the root of the project (i.e. in the same folder as
+the `package.json` file).
+- The `package.json` file contains a `"relay"` key.
 
-* The GraphQL-Compiler package provides a [`GraphQLFileParser`](./core/GraphQLFileParser.js), which can be used to parse general `.graphql` files, and a [`GraphQLTextParser`](./core/GraphQLTextParser.js), which can be used to parse GraphQL text in any source files with customized tags. You can also write your own `FileParser` at your discretion.
+Additionally, this config file can be specified with the CLI argument `--config`
+as follows:
 
-* You can add additional `IRTransforms` by extending the basic [`RelayIRTransforms`](./core/RelayIRTransforms.js).
+```shell
+npm run relay --config ./relay.json
+```
 
-* Similarly, you can add additional validation rules by extending [`RelayValidator`](./core/RelayValidator.js).
+or with yarn
 
-* A sample `FileWriter` can be found [HERE](./codegen/RelayFileWriter.js).
+```shell
+yarn relay --config ./relay.json
+```
 
-To actually run your compiler, you will also need a script to assemble all the above components. A sample file can be found [HERE](./bin/RelayCompilerBin.js).
+## File Finder
+Relay compiler uses [`watchman`](https://facebook.github.io/watchman/) to find
+file souces, and "listen" to the file  changes in the "watch" mode.
+If `watchman` is not available, the compiler will
+use [glob](https://docs.rs/glob/latest/glob/) to query the filesystem for files.
+
+## Configuration
+
+### Supported compiler configuration options
+
+- `src`                 Root directory of application code.  [string] [required]
+- `schema`              Relative path to the file with GraphQL SDL file.
+                                                             [string] [required]
+- `artifactDirectory`   A specific directory to output all artifacts to. When
+                        enabling this the babel plugin needs `artifactDirectory`
+                        to be set as well.                              [string]
+- `language`            The name of the language used for input files and
+                        generated artifacts.
+                                       ["flow" | "typescript"] [default: "flow"]
+- `excludes`            Directories to ignore under `src`.     [array] [default:
+               ["**/node_modules/**", "**/__mocks__/**", "**/__generated__/**"]]
+- `schemaExtensions`    List of directories with schema extensions.      [array]
+- `noFutureProofEnums`  For `flow` only. This option controls whether or not
+                        a catch-all entry is added to enum type definitions
+                        values that may be added in the future. Enabling this
+                        means you will have to update your application whenever
+                        the GraphQL server schema adds new enum values to
+                        prevent it from breaking.      [boolean][default: false]
+- `customScalars`       Mappings from custom scalars in your schema to built-in
+                        GraphQL types, for type emission purposes.      [object]
+- `eagerEsModules`      This option enables emitting ES modules artifacts.
+                                                       [boolean][default: false]
+- `persistConfig`
+  - `url`               String, URL to send a POST request to to persist.
+                                                                        [string]
+  - `params`            The document will be in a `POST`
+                        parameter `text`. This map can contain additional
+                        parameters to send.                             [object]
+
+### CLI configuration
+
+We also support a limited set of CLI arguments that should cover the most cases
+when you need to run the compiler.
+
+- `--src`               Relative path to the source code.
+- `--schema`            Relative path to schema file.
+- `--artifactDirectory` Compiler output directory.
+- `--watch`             Run compiler in `watch` mode
+(requires [`watchman`](https://facebook.github.io/watchman/) to be installed).

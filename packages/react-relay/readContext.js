@@ -8,13 +8,15 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
 const React = require('react');
 
 const {ReactCurrentDispatcher, ReactCurrentOwner} =
-  /* $FlowFixMe Flow doesn't know about React's internals for good reason,
-              but for now, Relay needs the dispatcher to read context. */
+  /* $FlowFixMe[prop-missing] Flow doesn't know about React's internals for
+   * good reason, but for now, Relay needs the dispatcher to read context. */
   React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED;
 
 function readContext<T>(Context: React.Context<T>): T {

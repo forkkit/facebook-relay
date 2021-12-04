@@ -9,10 +9,11 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
 const isRelayEnvironment = require('../isRelayEnvironment');
-
 const {Environment} = require('relay-runtime');
 
 describe('isRelayEnvironment()', () => {

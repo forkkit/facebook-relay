@@ -9,22 +9,31 @@
  * @emails oncall+relay
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const RelayModernRecord = require('../RelayModernRecord');
-const RelayRecordSource = require('../RelayRecordSource');
-
-const defaultGetDataID = require('../defaultGetDataID');
+const {
+  INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+  getActorIdentifier,
+} = require('../../multi-actor-environment/ActorIdentifier');
+const {getRequest, graphql} = require('../../query/GraphQLTag');
 const getRelayHandleKey = require('../../util/getRelayHandleKey');
-
+const RelayFeatureFlags = require('../../util/RelayFeatureFlags');
 const {check} = require('../DataChecker');
+const defaultGetDataID = require('../defaultGetDataID');
+const RelayModernRecord = require('../RelayModernRecord');
 const {createNormalizationSelector} = require('../RelayModernSelector');
+const RelayModernStore = require('../RelayModernStore');
+const RelayRecordSource = require('../RelayRecordSource');
 const {ROOT_ID} = require('../RelayStoreUtils');
-const {generateAndCompile} = require('relay-test-utils-internal');
+const {TYPE_SCHEMA_TYPE, generateTypeID} = require('../TypeID');
+const {createMockEnvironment} = require('relay-test-utils-internal');
 
-function getEmptyConnectionEvents() {
-  return null;
-}
+// TODO:
+// You may see some of the "__FlowFixMe__" in the calls to `createNormalizationSelector`.
+// This is because in this test we're relying on similarities between Reader and Normalization nodes during runtime.
+// This is not correct, and Flow is reporting these errors correctly. We need to prioritize fixing this.
 
 describe('check()', () => {
   let Query;
@@ -81,8 +90,8 @@ describe('check()', () => {
         'node(id:"1")': {__ref: '1'},
       },
     };
-    ({Query} = generateAndCompile(`
-      query Query($id: ID, $size: [Int]) {
+    Query = graphql`
+      query DataCheckerTestQuery($id: ID, $size: [Int]) {
         node(id: $id) {
           id
           __typename
@@ -108,22 +117,28 @@ describe('check()', () => {
           }
         }
       }
-    `));
+    `;
   });
 
   it('reads query data', () => {
     const source = RelayRecordSource.create(sampleData);
     const target = RelayRecordSource.create();
     const status = check(
-      source,
-      target,
-      createNormalizationSelector(Query.fragment, ROOT_ID, {id: '1', size: 32}),
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {
+        id: '1',
+        size: 32,
+      }),
       [],
       null,
       defaultGetDataID,
-      getEmptyConnectionEvents,
     );
-    expect(status).toBe(true);
+    expect(status).toEqual({
+      status: 'available',
+      mostRecentlyInvalidatedAt: null,
+    });
     expect(target.size()).toBe(0);
   });
 
@@ -164,10 +179,9 @@ describe('check()', () => {
     };
     const source = RelayRecordSource.create(data);
     const target = RelayRecordSource.create();
-    const {BarFragment} = generateAndCompile(`
-      fragment BarFragment on User @argumentDefinitions(
-        size: {type: "[Int]"}
-      ) {
+    const BarFragment = graphql`
+      fragment DataCheckerTestFragment on User
+      @argumentDefinitions(size: {type: "[Int]"}) {
         id
         firstName
         friends(first: 1) {
@@ -183,21 +197,26 @@ describe('check()', () => {
           uri
         }
       }
-    `);
+    `;
     const status = check(
-      source,
-      target,
-      createNormalizationSelector(BarFragment, '1', {size: 32}),
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector((BarFragment: $FlowFixMe), '1', {
+        size: 32,
+      }),
       [],
       null,
       defaultGetDataID,
-      getEmptyConnectionEvents,
     );
-    expect(status).toBe(true);
+    expect(status).toEqual({
+      status: 'available',
+      mostRecentlyInvalidatedAt: null,
+    });
     expect(target.size()).toBe(0);
   });
 
-  it('reads handle fields', () => {
+  it('reads handle fields in fragment', () => {
     const handleKey = getRelayHandleKey('test', null, 'profilePicture');
     const data = {
       '1': {
@@ -220,23 +239,402 @@ describe('check()', () => {
     };
     const source = RelayRecordSource.create(data);
     const target = RelayRecordSource.create();
-    const {Fragment} = generateAndCompile(`
-      fragment Fragment on User {
+    const Fragment = graphql`
+      fragment DataCheckerTest1Fragment on User {
         profilePicture(size: 32) @__clientField(handle: "test") {
           uri
         }
       }
-    `);
+    `;
     const status = check(
-      source,
-      target,
-      createNormalizationSelector(Fragment, '1', {}),
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector((Fragment: $FlowFixMe), '1', {}),
       [],
       null,
       defaultGetDataID,
-      getEmptyConnectionEvents,
     );
-    expect(status).toBe(true);
+    expect(status).toEqual({
+      status: 'available',
+      mostRecentlyInvalidatedAt: null,
+    });
+    expect(target.size()).toBe(0);
+  });
+
+  it('reads handle fields in fragment and checks missing', () => {
+    const data = {
+      '1': {
+        __id: '1',
+        id: '1',
+        __typename: 'User',
+        'profilePicture(size:32)': {__ref: 'client:1'},
+        // missing [handleKey] field
+      },
+      'client:1': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        uri: 'https://...',
+      },
+      'client:3': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        uri: 'https://...',
+      },
+    };
+    const source = RelayRecordSource.create(data);
+    const target = RelayRecordSource.create();
+    const Fragment = graphql`
+      fragment DataCheckerTest2Fragment on User {
+        profilePicture(size: 32) @__clientField(handle: "test") {
+          uri
+        }
+      }
+    `;
+    const status = check(
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector((Fragment: $FlowFixMe), '1', {}),
+      [],
+      null,
+      defaultGetDataID,
+    );
+    expect(status).toEqual({
+      status: 'missing',
+      mostRecentlyInvalidatedAt: null,
+    });
+    expect(target.size()).toBe(0);
+  });
+
+  it('reads handle fields in fragment and checks missing sub field', () => {
+    const handleKey = getRelayHandleKey('test', null, 'profilePicture');
+    const data = {
+      '1': {
+        __id: '1',
+        id: '1',
+        __typename: 'User',
+        'profilePicture(size:32)': {__ref: 'client:1'},
+        [handleKey]: {__ref: 'client:3'},
+      },
+      'client:1': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        uri: 'https://...',
+      },
+      'client:3': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        // uri field is missing
+      },
+    };
+    const source = RelayRecordSource.create(data);
+    const target = RelayRecordSource.create();
+    const Fragment = graphql`
+      fragment DataCheckerTest3Fragment on User {
+        profilePicture(size: 32) @__clientField(handle: "test") {
+          uri
+        }
+      }
+    `;
+    const status = check(
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector((Fragment: $FlowFixMe), '1', {}),
+      [],
+      null,
+      defaultGetDataID,
+    );
+    expect(status).toEqual({
+      status: 'missing',
+      mostRecentlyInvalidatedAt: null,
+    });
+    expect(target.size()).toBe(0);
+  });
+
+  it('reads handle fields in operation', () => {
+    const handleKey = getRelayHandleKey('test', null, 'profilePicture');
+    const data = {
+      'client:root': {
+        __id: 'client:root',
+        __typename: '__Root',
+        me: {__ref: '1'},
+      },
+      '1': {
+        __id: '1',
+        id: '1',
+        __typename: 'User',
+        'profilePicture(size:32)': {__ref: 'client:1'},
+        [handleKey]: {__ref: 'client:3'},
+      },
+      'client:1': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        uri: 'https://...',
+      },
+      'client:3': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        uri: 'https://...',
+      },
+    };
+    const source = RelayRecordSource.create(data);
+    const target = RelayRecordSource.create();
+    // LinkedHandle selectors are only generated for a the normalization
+    // code for a query
+    const ProfilePictureQuery = graphql`
+      query DataCheckerTest1Query {
+        me {
+          profilePicture(size: 32) @__clientField(handle: "test") {
+            uri
+          }
+        }
+      }
+    `;
+
+    const status = check(
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector(
+        getRequest(ProfilePictureQuery).operation,
+        'client:root',
+        {},
+      ),
+      [],
+      null,
+      defaultGetDataID,
+    );
+    expect(status).toEqual({
+      status: 'available',
+      mostRecentlyInvalidatedAt: null,
+    });
+    expect(target.size()).toBe(0);
+  });
+
+  it('reads handle fields in operation and checks missing', () => {
+    const data = {
+      'client:root': {
+        __id: 'client:root',
+        __typename: '__Root',
+        me: {__ref: '1'},
+      },
+      '1': {
+        __id: '1',
+        id: '1',
+        __typename: 'User',
+        'profilePicture(size:32)': {__ref: 'client:1'},
+        // missing [handleKey] field
+      },
+      'client:1': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        uri: 'https://...',
+      },
+      'client:3': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        uri: 'https://...',
+      },
+    };
+    const source = RelayRecordSource.create(data);
+    const target = RelayRecordSource.create();
+    // LinkedHandle selectors are only generated for a the normalization
+    // code for a query
+    const ProfilePictureQuery = graphql`
+      query DataCheckerTest7Query {
+        me {
+          profilePicture(size: 32) @__clientField(handle: "test") {
+            uri
+          }
+        }
+      }
+    `;
+    const status = check(
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector(
+        getRequest(ProfilePictureQuery).operation,
+        'client:root',
+        {},
+      ),
+      [],
+      null,
+      defaultGetDataID,
+    );
+    expect(status).toEqual({
+      status: 'missing',
+      mostRecentlyInvalidatedAt: null,
+    });
+    expect(target.size()).toBe(0);
+  });
+
+  it('reads handle fields in operation and checks missing sub field', () => {
+    const handleKey = getRelayHandleKey('test', null, 'profilePicture');
+    const data = {
+      'client:root': {
+        __id: 'client:root',
+        __typename: '__Root',
+        me: {__ref: '1'},
+      },
+      '1': {
+        __id: '1',
+        id: '1',
+        __typename: 'User',
+        'profilePicture(size:32)': {__ref: 'client:1'},
+        [handleKey]: {__ref: 'client:3'},
+      },
+      'client:1': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        uri: 'https://...',
+      },
+      'client:3': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        // uri field is missing
+      },
+    };
+    const source = RelayRecordSource.create(data);
+    const target = RelayRecordSource.create();
+    // LinkedHandle selectors are only generated for a the normalization
+    // code for a query
+    const ProfilePictureQuery = graphql`
+      query DataCheckerTest8Query {
+        me {
+          profilePicture(size: 32) @__clientField(handle: "test") {
+            uri
+          }
+        }
+      }
+    `;
+    const status = check(
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector(
+        getRequest(ProfilePictureQuery).operation,
+        'client:root',
+        {},
+      ),
+      [],
+      null,
+      defaultGetDataID,
+    );
+    expect(status).toEqual({
+      status: 'missing',
+      mostRecentlyInvalidatedAt: null,
+    });
+    expect(target.size()).toBe(0);
+  });
+
+  it('reads scalar handle fields in operation and checks presence', () => {
+    const handleKey = getRelayHandleKey('test', null, 'uri');
+    const data = {
+      'client:root': {
+        __id: 'client:root',
+        __typename: '__Root',
+        me: {__ref: '1'},
+      },
+      '1': {
+        __id: '1',
+        id: '1',
+        __typename: 'User',
+        'profilePicture(size:32)': {__ref: 'client:1'},
+      },
+      'client:1': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        uri: 'https://...',
+        [handleKey]: 'https://...',
+      },
+    };
+    const source = RelayRecordSource.create(data);
+    const target = RelayRecordSource.create();
+    // ScalarHandle selectors are only generated for a the normalization
+    // code for a query
+    const ProfilePictureQuery = graphql`
+      query DataCheckerTest2Query {
+        me {
+          profilePicture(size: 32) {
+            uri @__clientField(handle: "test")
+          }
+        }
+      }
+    `;
+    const status = check(
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector(
+        getRequest(ProfilePictureQuery).operation,
+        'client:root',
+        {},
+      ),
+      [],
+      null,
+      defaultGetDataID,
+    );
+    expect(status).toEqual({
+      status: 'available',
+      mostRecentlyInvalidatedAt: null,
+    });
+    expect(target.size()).toBe(0);
+  });
+
+  it('reads scalar handle fields in operation and checks missing', () => {
+    const data = {
+      'client:root': {
+        __id: 'client:root',
+        __typename: '__Root',
+        me: {__ref: '1'},
+      },
+      '1': {
+        __id: '1',
+        id: '1',
+        __typename: 'User',
+        'profilePicture(size:32)': {__ref: 'client:1'},
+      },
+      'client:1': {
+        __id: 'client:2',
+        __typename: 'Photo',
+        uri: 'https://...',
+        // [handleKey] field is missing
+      },
+    };
+    const source = RelayRecordSource.create(data);
+    const target = RelayRecordSource.create();
+    // ScalarHandle selectors are only generated for a the normalization
+    // code for a query
+    const ProfilePictureQuery = graphql`
+      query DataCheckerTest3Query {
+        me {
+          profilePicture(size: 32) {
+            uri @__clientField(handle: "test")
+          }
+        }
+      }
+    `;
+
+    const status = check(
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector(
+        getRequest(ProfilePictureQuery).operation,
+        'client:root',
+        {},
+      ),
+      [],
+      null,
+      defaultGetDataID,
+    );
+    expect(status).toEqual({
+      status: 'missing',
+      mostRecentlyInvalidatedAt: null,
+    });
     expect(target.size()).toBe(0);
   });
 
@@ -245,38 +643,47 @@ describe('check()', () => {
     let loader;
 
     beforeEach(() => {
-      const nodes = generateAndCompile(`
-        fragment PlainUserNameRenderer_name on PlainUserNameRenderer {
+      const DataCheckerTestPlainUserNameRenderer_nameFragment = graphql`
+        fragment DataCheckerTestPlainUserNameRenderer_nameFragment on PlainUserNameRenderer {
           plaintext
           data {
             text
           }
         }
-
-        fragment MarkdownUserNameRenderer_name on MarkdownUserNameRenderer {
+      `;
+      const DataCheckerTestMarkdownUserNameRenderer_nameFragment = graphql`
+        fragment DataCheckerTestMarkdownUserNameRenderer_nameFragment on MarkdownUserNameRenderer {
           markdown
           data {
             markup
           }
         }
+      `;
 
-        fragment BarFragment on User {
+      graphql`
+        fragment DataCheckerTest4Fragment on User {
           id
           nameRenderer @match {
-            ...PlainUserNameRenderer_name
+            ...DataCheckerTestPlainUserNameRenderer_nameFragment
               @module(name: "PlainUserNameRenderer.react")
-            ...MarkdownUserNameRenderer_name
+            ...DataCheckerTestMarkdownUserNameRenderer_nameFragment
               @module(name: "MarkdownUserNameRenderer.react")
           }
         }
+      `;
 
-        query BarQuery($id: ID!) {
+      BarQuery = graphql`
+        query DataCheckerTest4Query($id: ID!) {
           node(id: $id) {
-            ...BarFragment
+            ...DataCheckerTest4Fragment
           }
         }
-      `);
-      BarQuery = nodes.BarQuery;
+      `;
+      const nodes = {
+        DataCheckerTestPlainUserNameRenderer_nameFragment,
+        DataCheckerTestMarkdownUserNameRenderer_nameFragment,
+      };
+
       loader = {
         get: jest.fn(
           moduleName => nodes[String(moduleName).replace(/\$.*/, '')],
@@ -294,21 +701,23 @@ describe('check()', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'PlainUserNameRenderer',
+            __module_component_DataCheckerTest4Fragment:
+              'PlainUserNameRenderer.react',
+            __module_operation_DataCheckerTest4Fragment:
+              'DataCheckerTestPlainUserNameRenderer_nameFragment$normalization.graphql',
+            plaintext: 'plain name',
+            data: {__ref: 'data'},
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'PlainUserNameRenderer',
-          __module_component_BarFragment: 'PlainUserNameRenderer.react',
-          __module_operation_BarFragment:
-            'PlainUserNameRenderer_name$normalization.graphql',
-          plaintext: 'plain name',
-          data: {__ref: 'data'},
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -324,21 +733,29 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
       expect(loader.get).toBeCalledTimes(1);
+      // $FlowFixMe[prop-missing]
       expect(loader.get.mock.calls[0][0]).toBe(
-        'PlainUserNameRenderer_name$normalization.graphql',
+        'DataCheckerTestPlainUserNameRenderer_nameFragment$normalization.graphql',
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -349,21 +766,23 @@ describe('check()', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'MarkdownUserNameRenderer',
+            __module_component_DataCheckerTest4Fragment:
+              'MarkdownUserNameRenderer.react',
+            __module_operation_DataCheckerTest4Fragment:
+              'DataCheckerTestMarkdownUserNameRenderer_nameFragment$normalization.graphql',
+            markdown: 'markdown payload',
+            data: {__ref: 'data'},
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'MarkdownUserNameRenderer',
-          __module_component_BarFragment: 'MarkdownUserNameRenderer.react',
-          __module_operation_BarFragment:
-            'MarkdownUserNameRenderer_name$normalization.graphql',
-          markdown: 'markdown payload',
-          data: {__ref: 'data'},
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -379,17 +798,24 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -402,17 +828,18 @@ describe('check()', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'MarkdownUserNameRenderer',
+            // NOTE: markdown/data fields are missing, data not processed.
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'MarkdownUserNameRenderer',
-          // NOTE: markdown/data fields are missing, data not processed.
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -422,11 +849,16 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         // Return null to indicate the fragment is not loaded yet
         {
@@ -434,10 +866,12 @@ describe('check()', () => {
           load: _ => Promise.resolve(null),
         },
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
       // The data for the field isn't in the store yet, so we have to return false
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -448,18 +882,19 @@ describe('check()', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'MarkdownUserNameRenderer',
+            // NOTE: 'markdown' field missing
+            data: {__ref: 'data'},
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'MarkdownUserNameRenderer',
-          // NOTE: 'markdown' field missing
-          data: {__ref: 'data'},
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -475,18 +910,25 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
       // The data for the field 'data' isn't in the store yet, so we have to return false
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -497,18 +939,19 @@ describe('check()', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'MarkdownUserNameRenderer',
+            markdown: 'markdown text',
+            // NOTE: 'data' field missing
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'MarkdownUserNameRenderer',
-          markdown: 'markdown text',
-          // NOTE: 'data' field missing
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -518,18 +961,25 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
       // The data for the field 'data' isn't in the store yet, so we have to return false
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -539,17 +989,18 @@ describe('check()', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'CustomNameRenderer',
+            customField: 'custom value',
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'CustomNameRenderer',
-          customField: 'custom value',
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -559,17 +1010,24 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -579,7 +1037,8 @@ describe('check()', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': null,
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            null,
         },
         'client:root': {
           __id: 'client:root',
@@ -590,17 +1049,24 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -620,17 +1086,24 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
   });
@@ -640,38 +1113,47 @@ describe('check()', () => {
     let loader;
 
     beforeEach(() => {
-      const nodes = generateAndCompile(`
-        fragment PlainUserNameRenderer_name on PlainUserNameRenderer {
+      const DataCheckerTest5PlainUserNameRenderer_name = graphql`
+        fragment DataCheckerTest5PlainUserNameRenderer_name on PlainUserNameRenderer {
           plaintext
           data {
             text
           }
         }
+      `;
 
-        fragment MarkdownUserNameRenderer_name on MarkdownUserNameRenderer {
+      const DataCheckerTest5MarkdownUserNameRenderer_name = graphql`
+        fragment DataCheckerTest5MarkdownUserNameRenderer_name on MarkdownUserNameRenderer {
           markdown
           data {
             markup
           }
         }
-
-        fragment BarFragment on User {
+      `;
+      graphql`
+        fragment DataCheckerTest5Fragment on User {
           id
-          nameRenderer { # no @match
-            ...PlainUserNameRenderer_name
+          nameRenderer {
+            # no @match
+            ...DataCheckerTest5PlainUserNameRenderer_name
               @module(name: "PlainUserNameRenderer.react")
-            ...MarkdownUserNameRenderer_name
+            ...DataCheckerTest5MarkdownUserNameRenderer_name
               @module(name: "MarkdownUserNameRenderer.react")
           }
         }
-
-        query BarQuery($id: ID!) {
+      `;
+      BarQuery = graphql`
+        query DataCheckerTest5Query($id: ID!) {
           node(id: $id) {
-            ...BarFragment
+            ...DataCheckerTest5Fragment
           }
         }
-      `);
-      BarQuery = nodes.BarQuery;
+      `;
+      const nodes = {
+        DataCheckerTest5PlainUserNameRenderer_name,
+        DataCheckerTest5MarkdownUserNameRenderer_name,
+      };
+
       loader = {
         get: jest.fn(
           moduleName => nodes[String(moduleName).replace(/\$.*/, '')],
@@ -696,9 +1178,10 @@ describe('check()', () => {
         'client:1:nameRenderer': {
           __id: 'client:1:nameRenderer',
           __typename: 'PlainUserNameRenderer',
-          __module_component_BarFragment: 'PlainUserNameRenderer.react',
-          __module_operation_BarFragment:
-            'PlainUserNameRenderer_name$normalization.graphql',
+          __module_component_DataCheckerTest5Fragment:
+            'PlainUserNameRenderer.react',
+          __module_operation_DataCheckerTest5Fragment:
+            'DataCheckerTest5PlainUserNameRenderer_name$normalization.graphql',
           plaintext: 'plain name',
           data: {__ref: 'data'},
         },
@@ -717,21 +1200,29 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
       expect(loader.get).toBeCalledTimes(1);
+      // $FlowFixMe[prop-missing]
       expect(loader.get.mock.calls[0][0]).toBe(
-        'PlainUserNameRenderer_name$normalization.graphql',
+        'DataCheckerTest5PlainUserNameRenderer_name$normalization.graphql',
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -749,9 +1240,10 @@ describe('check()', () => {
         'client:1:nameRenderer': {
           __id: 'client:1:nameRenderer',
           __typename: 'MarkdownUserNameRenderer',
-          __module_component_BarFragment: 'MarkdownUserNameRenderer.react',
-          __module_operation_BarFragment:
-            'MarkdownUserNameRenderer_name$normalization.graphql',
+          __module_component_DataCheckerTest5Fragment:
+            'MarkdownUserNameRenderer.react',
+          __module_operation_DataCheckerTest5Fragment:
+            'DataCheckerTest5MarkdownUserNameRenderer_name$normalization.graphql',
           markdown: 'markdown payload',
           data: {__ref: 'data'},
         },
@@ -770,17 +1262,24 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -811,11 +1310,16 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         // Return null to indicate the fragment is not loaded yet
         {
@@ -823,10 +1327,12 @@ describe('check()', () => {
           load: _ => Promise.resolve(null),
         },
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
       // The data for the field isn't in the store yet, so we have to return false
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -862,18 +1368,25 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
       // The data for the field 'data' isn't in the store yet, so we have to return false
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -903,18 +1416,25 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
       // The data for the field 'data' isn't in the store yet, so we have to return false
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -942,36 +1462,44 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarQuery.operation, 'client:root', {
-          id: '1',
-        }),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(BarQuery).operation,
+          'client:root',
+          {
+            id: '1',
+          },
+        ),
         [],
         loader,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
   });
 
   describe('when @defer directive is present', () => {
     beforeEach(() => {
-      const nodes = generateAndCompile(`
-        fragment TestFragment on User {
+      graphql`
+        fragment DataCheckerTest6Fragment on User {
           id
           name
         }
+      `;
 
-        query TestQuery($id: ID!) {
+      Query = graphql`
+        query DataCheckerTest9Query($id: ID!) {
           node(id: $id) {
-            ...TestFragment @defer(label: "TestFragment")
+            ...DataCheckerTest6Fragment @defer(label: "TestFragment")
           }
         }
-      `);
-      Query = nodes.TestQuery;
+      `;
     });
 
     it('returns true when deferred selections are fetched', () => {
@@ -991,15 +1519,22 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(Query.operation, 'client:root', {id: '1'}),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(Query).operation,
+          'client:root',
+          {id: '1'},
+        ),
         [],
         null,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -1020,36 +1555,43 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(Query.operation, 'client:root', {id: '1'}),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(Query).operation,
+          'client:root',
+          {id: '1'},
+        ),
         [],
         null,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
   });
 
   describe('when @stream directive is present', () => {
     beforeEach(() => {
-      const nodes = generateAndCompile(`
-        fragment TestFragment on Feedback {
+      graphql`
+        fragment DataCheckerTest7Fragment on Feedback {
           id
           actors @stream(label: "TestFragmentActors", initial_count: 0) {
             name
           }
         }
-
-        query TestQuery($id: ID!) {
+      `;
+      Query = graphql`
+        query DataCheckerTest6Query($id: ID!) {
           node(id: $id) {
-            ...TestFragment
+            ...DataCheckerTest7Fragment
           }
         }
-      `);
-      Query = nodes.TestQuery;
+      `;
     });
 
     it('returns true when streamed selections are fetched', () => {
@@ -1075,15 +1617,22 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(Query.operation, 'client:root', {id: '1'}),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(Query).operation,
+          'client:root',
+          {id: '1'},
+        ),
         [],
         null,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -1110,42 +1659,52 @@ describe('check()', () => {
       const source = RelayRecordSource.create(storeData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(Query.operation, 'client:root', {id: '1'}),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(Query).operation,
+          'client:root',
+          {id: '1'},
+        ),
         [],
         null,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
   });
 
   describe('when the data is complete', () => {
-    it('returns `true`', () => {
+    it('returns available', () => {
       const source = RelayRecordSource.create(sampleData);
       const target = RelayRecordSource.create();
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(Query.fragment, ROOT_ID, {
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {
           id: '1',
           size: 32,
         }),
         [],
         null,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
   });
 
   describe('when some data is missing', () => {
-    it('returns false on missing records', () => {
+    it('returns missing on missing records', () => {
       const data = {
         '1': {
           __id: '1',
@@ -1158,31 +1717,33 @@ describe('check()', () => {
       };
       const source = RelayRecordSource.create(data);
       const target = RelayRecordSource.create();
-      const {BarFragment} = generateAndCompile(`
-        fragment BarFragment on User @argumentDefinitions(
-          size: {type: "[Int]"}
-        ) {
+      const BarFragment = graphql`
+        fragment DataCheckerTest8Fragment on User
+        @argumentDefinitions(size: {type: "[Int]"}) {
           id
           firstName
           profilePicture(size: $size) {
             uri
           }
         }
-      `);
+      `;
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarFragment, '1', {size: 32}),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector((BarFragment: $FlowFixMe), '1', {size: 32}),
         [],
         null,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
-    it('returns false on missing fields', () => {
+    it('returns missing on missing fields', () => {
       const data = {
         '1': {
           __id: '1',
@@ -1198,27 +1759,29 @@ describe('check()', () => {
       };
       const source = RelayRecordSource.create(data);
       const target = RelayRecordSource.create();
-      const {BarFragment} = generateAndCompile(`
-        fragment BarFragment on User @argumentDefinitions(
-          size: {type: "[Int]"}
-        ) {
+      const BarFragment = graphql`
+        fragment DataCheckerTest9Fragment on User
+        @argumentDefinitions(size: {type: "[Int]"}) {
           id
           firstName
           profilePicture(size: $size) {
             uri
           }
         }
-      `);
+      `;
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarFragment, '1', {size: 32}),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector((BarFragment: $FlowFixMe), '1', {size: 32}),
         [],
         null,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(false);
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
 
@@ -1239,21 +1802,21 @@ describe('check()', () => {
       };
       const source = RelayRecordSource.create(data);
       const target = RelayRecordSource.create();
-      const {BarFragment} = generateAndCompile(`
-        fragment BarFragment on User @argumentDefinitions(
-          size: {type: "[Int]"}
-        ) {
+      const BarFragment = graphql`
+        fragment DataCheckerTest10Fragment on User
+        @argumentDefinitions(size: {type: "[Int]"}) {
           id
           firstName
           profilePicture(size: $size) {
             uri
           }
         }
-      `);
+      `;
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarFragment, '1', {size: 32}),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector((BarFragment: $FlowFixMe), '1', {size: 32}),
         [
           {
             kind: 'scalar',
@@ -1264,9 +1827,11 @@ describe('check()', () => {
         ],
         null,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.toJSON()).toEqual({
         'client:3': {
           __id: 'client:3',
@@ -1281,7 +1846,7 @@ describe('check()', () => {
         'undefined',
         {
           handleReturnValue: undefined,
-          expectedStatus: false,
+          expectedStatus: {status: 'missing', mostRecentlyInvalidatedAt: null},
           updatedHometown: undefined,
         },
       ],
@@ -1289,15 +1854,21 @@ describe('check()', () => {
         'null',
         {
           handleReturnValue: null,
-          expectedStatus: false,
-          updatedHometown: undefined,
+          expectedStatus: {
+            status: 'available',
+            mostRecentlyInvalidatedAt: null,
+          },
+          updatedHometown: null,
         },
       ],
       [
         "'hometown-exists'",
         {
           handleReturnValue: 'hometown-exists',
-          expectedStatus: true,
+          expectedStatus: {
+            status: 'available',
+            mostRecentlyInvalidatedAt: null,
+          },
           updatedHometown: 'hometown-exists',
         },
       ],
@@ -1305,7 +1876,7 @@ describe('check()', () => {
         "'hometown-deleted'",
         {
           handleReturnValue: 'hometown-deleted',
-          expectedStatus: false,
+          expectedStatus: {status: 'missing', mostRecentlyInvalidatedAt: null},
           updatedHometown: undefined,
         },
       ],
@@ -1313,7 +1884,7 @@ describe('check()', () => {
         "'hometown-unknown'",
         {
           handleReturnValue: 'hometown-unknown',
-          expectedStatus: false,
+          expectedStatus: {status: 'missing', mostRecentlyInvalidatedAt: null},
           updatedHometown: undefined,
         },
       ],
@@ -1337,20 +1908,21 @@ describe('check()', () => {
         };
         const source = RelayRecordSource.create(data);
         const target = RelayRecordSource.create();
-        const {UserFragment} = generateAndCompile(`
-          fragment UserFragment on User {
+        const UserFragment = graphql`
+          fragment DataCheckerTest11Fragment on User {
             hometown {
               name
             }
           }
-        `);
+        `;
         const handle = jest.fn((field, record, argValues) => {
           return handleReturnValue;
         });
         const status = check(
-          source,
-          target,
-          createNormalizationSelector(UserFragment, 'user1', {}),
+          () => source,
+          () => target,
+          INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+          createNormalizationSelector((UserFragment: $FlowFixMe), 'user1', {}),
           [
             {
               kind: 'linked',
@@ -1359,13 +1931,20 @@ describe('check()', () => {
           ],
           null,
           defaultGetDataID,
-          getEmptyConnectionEvents,
         );
         expect(handle).toBeCalledTimes(1);
-        expect(status).toBe(expectedStatus);
+        expect(status).toEqual(expectedStatus);
         expect(target.toJSON()).toEqual(
           updatedHometown === undefined
             ? {}
+            : updatedHometown === null
+            ? {
+                user1: {
+                  __id: 'user1',
+                  __typename: 'User',
+                  hometown: null,
+                },
+              }
             : {
                 user1: {
                   __id: 'user1',
@@ -1384,7 +1963,7 @@ describe('check()', () => {
         'undefined',
         {
           handleReturnValue: undefined,
-          expectedStatus: false,
+          expectedStatus: {status: 'missing', mostRecentlyInvalidatedAt: null},
           updatedScreennames: undefined,
         },
       ],
@@ -1392,15 +1971,21 @@ describe('check()', () => {
         'null',
         {
           handleReturnValue: null,
-          expectedStatus: false,
-          updatedScreennames: undefined,
+          expectedStatus: {
+            status: 'available',
+            mostRecentlyInvalidatedAt: null,
+          },
+          updatedScreennames: null,
         },
       ],
       [
         '[]',
         {
           handleReturnValue: [],
-          expectedStatus: true,
+          expectedStatus: {
+            status: 'available',
+            mostRecentlyInvalidatedAt: null,
+          },
           updatedScreennames: [],
         },
       ],
@@ -1408,7 +1993,7 @@ describe('check()', () => {
         '[undefined]',
         {
           handleReturnValue: [undefined],
-          expectedStatus: false,
+          expectedStatus: {status: 'missing', mostRecentlyInvalidatedAt: null},
           updatedScreennames: undefined,
         },
       ],
@@ -1416,7 +2001,7 @@ describe('check()', () => {
         '[null]',
         {
           handleReturnValue: [null],
-          expectedStatus: false,
+          expectedStatus: {status: 'missing', mostRecentlyInvalidatedAt: null},
           updatedScreennames: undefined,
         },
       ],
@@ -1424,7 +2009,10 @@ describe('check()', () => {
         "['screenname-exists']",
         {
           handleReturnValue: ['screenname-exists'],
-          expectedStatus: true,
+          expectedStatus: {
+            status: 'available',
+            mostRecentlyInvalidatedAt: null,
+          },
           updatedScreennames: ['screenname-exists'],
         },
       ],
@@ -1432,7 +2020,7 @@ describe('check()', () => {
         "['screenname-deleted']",
         {
           handleReturnValue: ['screenname-deleted'],
-          expectedStatus: false,
+          expectedStatus: {status: 'missing', mostRecentlyInvalidatedAt: null},
           updatedScreennames: undefined,
         },
       ],
@@ -1440,7 +2028,7 @@ describe('check()', () => {
         "['screenname-unknown']",
         {
           handleReturnValue: ['screenname-unknown'],
-          expectedStatus: false,
+          expectedStatus: {status: 'missing', mostRecentlyInvalidatedAt: null},
           updatedScreennames: undefined,
         },
       ],
@@ -1448,7 +2036,7 @@ describe('check()', () => {
         "['screenname-exists', 'screenname-unknown']",
         {
           handleReturnValue: ['screenname-exists', 'screenname-unknown'],
-          expectedStatus: false,
+          expectedStatus: {status: 'missing', mostRecentlyInvalidatedAt: null},
           updatedScreennames: undefined,
         },
       ],
@@ -1472,20 +2060,21 @@ describe('check()', () => {
         };
         const source = RelayRecordSource.create(data);
         const target = RelayRecordSource.create();
-        const {UserFragment} = generateAndCompile(`
-          fragment UserFragment on User {
+        const UserFragment = graphql`
+          fragment DataCheckerTest12Fragment on User {
             screennames {
               name
             }
           }
-        `);
+        `;
         const handle = jest.fn((field, record, argValues) => {
           return handleReturnValue;
         });
         const status = check(
-          source,
-          target,
-          createNormalizationSelector(UserFragment, 'user1', {}),
+          () => source,
+          () => target,
+          INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+          createNormalizationSelector((UserFragment: $FlowFixMe), 'user1', {}),
           [
             {
               kind: 'pluralLinked',
@@ -1494,13 +2083,20 @@ describe('check()', () => {
           ],
           null,
           defaultGetDataID,
-          getEmptyConnectionEvents,
         );
         expect(handle).toBeCalledTimes(1);
-        expect(status).toBe(expectedStatus);
+        expect(status).toEqual(expectedStatus);
         expect(target.toJSON()).toEqual(
-          updatedScreennames == null
+          updatedScreennames === undefined
             ? {}
+            : updatedScreennames === null
+            ? {
+                user1: {
+                  __id: 'user1',
+                  __typename: 'User',
+                  screennames: null,
+                },
+              }
             : {
                 user1: {
                   __id: 'user1',
@@ -1530,21 +2126,21 @@ describe('check()', () => {
       };
       const source = RelayRecordSource.create(data);
       const target = RelayRecordSource.create();
-      const {BarFragment} = generateAndCompile(`
-        fragment BarFragment on User @argumentDefinitions(
-          size: {type: "[Int]"}
-        ) {
+      const BarFragment = graphql`
+        fragment DataCheckerTest13Fragment on User
+        @argumentDefinitions(size: {type: "[Int]"}) {
           id
           firstName
           profilePicture(size: $size) {
             uri
           }
         }
-      `);
+      `;
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarFragment, '1', {size: 32}),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector((BarFragment: $FlowFixMe), '1', {size: 32}),
         [
           {
             kind: 'scalar',
@@ -1574,9 +2170,11 @@ describe('check()', () => {
         ],
         null,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.toJSON()).toEqual({
         '1': {
           __id: '1',
@@ -1587,7 +2185,7 @@ describe('check()', () => {
       });
     });
 
-    it('returns true even when client field is missing', () => {
+    it('returns available even when client field is missing', () => {
       const data = {
         '1': {
           __id: '1',
@@ -1599,10 +2197,9 @@ describe('check()', () => {
       };
       const source = RelayRecordSource.create(data);
       const target = RelayRecordSource.create();
-      const {BarFragment} = generateAndCompile(`
-        fragment BarFragment on User @argumentDefinitions(
-          size: {type: "[Int]"}
-        ) {
+      const BarFragment = graphql`
+        fragment DataCheckerTest14Fragment on User
+        @argumentDefinitions(size: {type: "[Int]"}) {
           id
           firstName
           client_actor_field
@@ -1636,96 +2233,323 @@ describe('check()', () => {
             }
           }
         }
-        extend type FriendsEdge {
-          client_friend_edge_field: String
-        }
-        extend type User {
-          nickname: String
-          best_friends: FriendsConnection
-          client_actor_field: String
-          client_foo: Foo
-        }
-        extend type FriendsConnection {
-          client_friends_connection_field: String
-        }
-        extend type Page {
-          client_actor_field: String
-        }
-        extend interface Actor {
-          client_actor_field: String
-        }
-        type Foo {
-          client_name: String
-          profile_picture(scale: Float): Image
-        }
-      `);
+      `;
       const status = check(
-        source,
-        target,
-        createNormalizationSelector(BarFragment, '1', {size: 32}),
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector((BarFragment: $FlowFixMe), '1', {size: 32}),
         [],
         null,
         defaultGetDataID,
-        getEmptyConnectionEvents,
       );
-      expect(status).toBe(true);
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
       expect(target.size()).toBe(0);
     });
   });
 
-  it('returns true when a non-Node record is "missing" an id', () => {
-    const {TestFragment} = generateAndCompile(`
-      fragment TestFragment on Query {
-        maybeNodeInterface {
-          # This "... on Node { id }" selection would be generated if not
-          # present, and is flattened since Node is abstract
-          ... on Node { id }
-          ... on NonNodeNoID {
-            name
+  describe('when individual records have been invalidated', () => {
+    describe('when data is complete', () => {
+      it('returns correct invalidation epoch in result when record was invalidated', () => {
+        const source = RelayRecordSource.create(sampleData);
+        const target = RelayRecordSource.create();
+        const environment = createMockEnvironment({
+          store: new RelayModernStore(source),
+        });
+
+        // Invalidate record
+        environment.commitUpdate(storeProxy => {
+          const user = storeProxy.get('1');
+          if (!user) {
+            throw new Error('Expected to find record with id "1"');
           }
-        }
-      }
-    `);
-    const data = {
-      'client:root': {
-        __id: 'client:root',
-        __typename: 'Query',
-        maybeNodeInterface: {__ref: 'client:root:maybeNodeInterface'},
-      },
-      'client:root:maybeNodeInterface': {
-        __id: 'client:root:maybeNodeInterface',
-        __typename: 'NonNodeNoID',
-        name: 'Alice',
-      },
-    };
-    const source = RelayRecordSource.create(data);
-    const target = RelayRecordSource.create();
-    const status = check(
-      source,
-      target,
-      createNormalizationSelector(TestFragment, 'client:root', {}),
-      [],
-      null,
-      defaultGetDataID,
-      getEmptyConnectionEvents,
-    );
-    expect(status).toBe(true);
-    expect(target.size()).toBe(0);
+          user.invalidateRecord();
+        });
+
+        const status = check(
+          () => source,
+          () => target,
+          INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+          createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {
+            id: '1',
+            size: 32,
+          }),
+          [],
+          null,
+          defaultGetDataID,
+        );
+
+        // Assert mostRecentlyInvalidatedAt matches most recent invalidation epoch
+        expect(status).toEqual({
+          status: 'available',
+          mostRecentlyInvalidatedAt: 1,
+        });
+        expect(target.size()).toBe(0);
+      });
+
+      it('returns correct invalidation epoch in result when multiple records invalidated at different times', () => {
+        const source = RelayRecordSource.create(sampleData);
+        const target = RelayRecordSource.create();
+        const environment = createMockEnvironment({
+          store: new RelayModernStore(source),
+        });
+
+        // Invalidate record
+        environment.commitUpdate(storeProxy => {
+          const user = storeProxy.get('1');
+          if (!user) {
+            throw new Error('Expected to find record with id "1"');
+          }
+          user.invalidateRecord();
+        });
+
+        const status = check(
+          () => source,
+          () => target,
+          INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+          createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {
+            id: '1',
+            size: 32,
+          }),
+          [],
+          null,
+          defaultGetDataID,
+        );
+
+        // Assert mostRecentlyInvalidatedAt matches most recent invalidation epoch
+        expect(status).toEqual({
+          status: 'available',
+          mostRecentlyInvalidatedAt: 1,
+        });
+        expect(target.size()).toBe(0);
+
+        // Invalidate other record in operation
+        environment.commitUpdate(storeProxy => {
+          const photo = storeProxy.get('client:4');
+          if (!photo) {
+            throw new Error('Expected to find record with id "client:4"');
+          }
+          photo.invalidateRecord();
+        });
+
+        const nextStatus = check(
+          () => source,
+          () => target,
+          INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+          createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {
+            id: '1',
+            size: 32,
+          }),
+          [],
+          null,
+          defaultGetDataID,
+        );
+
+        // Assert mostRecentlyInvalidatedAt matches most recent invalidation epoch
+        expect(nextStatus).toEqual({
+          status: 'available',
+          mostRecentlyInvalidatedAt: 2,
+        });
+        expect(target.size()).toBe(0);
+      });
+    });
+
+    describe('when data is missing', () => {
+      beforeEach(() => {
+        sampleData = {
+          ...sampleData,
+          'client:4': {
+            __id: 'client:4',
+            __typename: 'Photo',
+            // missing 'uri'
+          },
+        };
+      });
+
+      it('returns correct invalidation epoch in result when record was invalidated', () => {
+        const source = RelayRecordSource.create(sampleData);
+        const target = RelayRecordSource.create();
+        const environment = createMockEnvironment({
+          store: new RelayModernStore(source),
+        });
+
+        // Invalidate record
+        environment.commitUpdate(storeProxy => {
+          const user = storeProxy.get('1');
+          if (!user) {
+            throw new Error('Expected to find record with id "1"');
+          }
+          user.invalidateRecord();
+        });
+
+        const status = check(
+          () => source,
+          () => target,
+          INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+          createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {
+            id: '1',
+            size: 32,
+          }),
+          [],
+          null,
+          defaultGetDataID,
+        );
+
+        // Assert result is missing
+        expect(status).toEqual({
+          status: 'missing',
+          mostRecentlyInvalidatedAt: 1,
+        });
+        expect(target.size()).toBe(0);
+      });
+
+      it('returns correct invalidation epoch in result when multiple records invalidated at different times', () => {
+        const source = RelayRecordSource.create(sampleData);
+        const target = RelayRecordSource.create();
+        const environment = createMockEnvironment({
+          store: new RelayModernStore(source),
+        });
+
+        // Invalidate record
+        environment.commitUpdate(storeProxy => {
+          const user = storeProxy.get('1');
+          if (!user) {
+            throw new Error('Expected to find record with id "1"');
+          }
+          user.invalidateRecord();
+        });
+
+        const status = check(
+          () => source,
+          () => target,
+          INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+          createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {
+            id: '1',
+            size: 32,
+          }),
+          [],
+          null,
+          defaultGetDataID,
+        );
+
+        // Assert that result is missing
+        expect(status).toEqual({
+          status: 'missing',
+          mostRecentlyInvalidatedAt: 1,
+        });
+        expect(target.size()).toBe(0);
+
+        // Invalidate other record in operation
+        environment.commitUpdate(storeProxy => {
+          const photo = storeProxy.get('client:4');
+          if (!photo) {
+            throw new Error('Expected to find record with id "client:4"');
+          }
+          photo.invalidateRecord();
+        });
+
+        const nextStatus = check(
+          () => source,
+          () => target,
+          INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+          createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {
+            id: '1',
+            size: 32,
+          }),
+          [],
+          null,
+          defaultGetDataID,
+        );
+
+        // Assert that result is still missing
+        expect(nextStatus).toEqual({
+          status: 'missing',
+          mostRecentlyInvalidatedAt: 2,
+        });
+        expect(target.size()).toBe(0);
+      });
+
+      it('returns null invalidation epoch when stale record is unreachable', () => {
+        sampleData = {
+          // Root record is missing, so none of the descendants are reachable
+          '1': {
+            __id: '1',
+            id: '1',
+            __typename: 'User',
+            firstName: 'Alice',
+            'friends(first:3)': {__ref: 'client:1'},
+            'profilePicture(size:32)': {__ref: 'client:4'},
+          },
+          'client:1': {
+            __id: 'client:1',
+            __typename: 'FriendsConnection',
+            edges: {
+              __refs: [],
+            },
+          },
+          'client:4': {
+            __id: 'client:4',
+            __typename: 'Photo',
+            // uri is missing
+          },
+        };
+        const source = RelayRecordSource.create(sampleData);
+        const target = RelayRecordSource.create();
+        const environment = createMockEnvironment({
+          store: new RelayModernStore(source),
+        });
+
+        // Invalidate record
+        environment.commitUpdate(storeProxy => {
+          const user = storeProxy.get('1');
+          if (!user) {
+            throw new Error('Expected to find record with id "1"');
+          }
+          user.invalidateRecord();
+        });
+
+        const status = check(
+          () => source,
+          () => target,
+          INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+          createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {
+            id: '1',
+            size: 32,
+          }),
+          [],
+          null,
+          defaultGetDataID,
+        );
+
+        // Assert that result is missing
+        expect(status).toEqual({
+          status: 'missing',
+          mostRecentlyInvalidatedAt: null,
+        });
+        expect(target.size()).toBe(0);
+      });
+    });
   });
 
   it('returns false when a Node record is missing an id', () => {
-    const {TestFragment} = generateAndCompile(`
-      fragment TestFragment on Query {
+    const TestFragment = graphql`
+      fragment DataCheckerTest16Fragment on Query {
         maybeNodeInterface {
           # This "... on Node { id }" selection would be generated if not
           # present, and is flattened since Node is abstract
-          ... on Node { id }
+          ... on Node {
+            id
+          }
           ... on NonNodeNoID {
             name
           }
         }
       }
-    `);
+    `;
+
     const data = {
       'client:root': {
         __id: 'client:root',
@@ -1742,15 +2566,673 @@ describe('check()', () => {
     const source = RelayRecordSource.create(data);
     const target = RelayRecordSource.create();
     const status = check(
-      source,
-      target,
-      createNormalizationSelector(TestFragment, 'client:root', {}),
+      () => source,
+      () => target,
+      INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+      createNormalizationSelector(
+        (TestFragment: $FlowFixMe),
+        'client:root',
+        {},
+      ),
       [],
       null,
       defaultGetDataID,
-      getEmptyConnectionEvents,
     );
-    expect(status).toBe(false);
+    expect(status).toEqual({
+      status: 'missing',
+      mostRecentlyInvalidatedAt: null,
+    });
     expect(target.size()).toBe(0);
+  });
+
+  describe('precise type refinement', () => {
+    it('returns `missing` when a Node record is missing an id', () => {
+      const TestFragment = graphql`
+        fragment DataCheckerTest17Fragment on Query {
+          maybeNodeInterface {
+            # This "... on Node { id }" selection would be generated if not present
+            ... on Node {
+              id
+            }
+            ... on NonNodeNoID {
+              name
+            }
+          }
+        }
+      `;
+
+      const typeID = generateTypeID('User');
+      const data = {
+        'client:root': {
+          __id: 'client:root',
+          __typename: 'Query',
+          maybeNodeInterface: {__ref: '1'},
+        },
+        '1': {
+          __id: '1',
+          __typename: 'User',
+          name: 'Alice',
+          // no `id` value
+        },
+        [typeID]: {
+          __id: typeID,
+          __typename: TYPE_SCHEMA_TYPE,
+          __isNode: true,
+        },
+      };
+      const source = RelayRecordSource.create(data);
+      const target = RelayRecordSource.create();
+      const status = check(
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          (TestFragment: $FlowFixMe),
+          'client:root',
+          {},
+        ),
+        [],
+        null,
+        defaultGetDataID,
+      );
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
+      expect(target.size()).toBe(0);
+    });
+    it('returns `missing` when an abstract refinement is only missing the discriminator field', () => {
+      const TestFragment = graphql`
+        fragment DataCheckerTest18Fragment on Query {
+          maybeNodeInterface {
+            # This "... on Node { id }" selection would be generated if not present
+            ... on Node {
+              id
+            }
+            ... on NonNodeNoID {
+              name
+            }
+          }
+        }
+      `;
+
+      const typeID = generateTypeID('User');
+      const data = {
+        'client:root': {
+          __id: 'client:root',
+          __typename: 'Query',
+          maybeNodeInterface: {__ref: '1'},
+        },
+        '1': {
+          __id: '1',
+          __typename: 'User',
+          name: 'Alice',
+          id: '1',
+        },
+        [typeID]: {
+          __id: typeID,
+          __typename: TYPE_SCHEMA_TYPE,
+          // __isNode: true, // dont know if it implements Node or not
+        },
+      };
+      const source = RelayRecordSource.create(data);
+      const target = RelayRecordSource.create();
+      const status = check(
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          (TestFragment: $FlowFixMe),
+          'client:root',
+          {},
+        ),
+        [],
+        null,
+        defaultGetDataID,
+      );
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
+      expect(target.size()).toBe(0);
+    });
+
+    it('returns `available` when a record is only missing fields in non-implemented interfaces', () => {
+      const TestFragment = graphql`
+        fragment DataCheckerTest19Fragment on Query {
+          maybeNodeInterface {
+            # This "... on Node { id }" selection would be generated if not present
+            ... on Node {
+              id
+            }
+            ... on NonNodeNoID {
+              name
+            }
+          }
+        }
+      `;
+
+      const typeID = generateTypeID('NonNodeNoID');
+      const data = {
+        'client:root': {
+          __id: 'client:root',
+          __typename: 'Query',
+          maybeNodeInterface: {__ref: '1'},
+        },
+        '1': {
+          __id: '1',
+          __typename: 'NonNodeNoID',
+          // no 'id' bc not a Node
+          name: 'Not a Node!',
+        },
+        [typeID]: {
+          __id: typeID,
+          __typename: TYPE_SCHEMA_TYPE,
+          __isNode: false,
+        },
+      };
+      const source = RelayRecordSource.create(data);
+      const target = RelayRecordSource.create();
+      const status = check(
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          (TestFragment: $FlowFixMe),
+          'client:root',
+          {},
+        ),
+        [],
+        null,
+        defaultGetDataID,
+      );
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
+      expect(target.size()).toBe(0);
+    });
+  });
+
+  describe('with feature ENABLE_REACT_FLIGHT_COMPONENT_FIELD', () => {
+    let FlightQuery;
+    let InnerQuery;
+    let operationLoader;
+
+    const readRoot = () => {
+      return {
+        $$typeof: Symbol.for('react.element'),
+        type: 'div',
+        key: null,
+        ref: null,
+        props: {foo: 1},
+      };
+    };
+
+    beforeEach(() => {
+      RelayFeatureFlags.ENABLE_REACT_FLIGHT_COMPONENT_FIELD = true;
+
+      FlightQuery = graphql`
+        query DataCheckerTestFlightQuery($id: ID!, $count: Int!) {
+          node(id: $id) {
+            ... on Story {
+              flightComponent(condition: true, count: $count, id: $id)
+            }
+          }
+        }
+      `;
+      InnerQuery = graphql`
+        query DataCheckerTestInnerQuery($id: ID!) {
+          node(id: $id) {
+            ... on User {
+              name
+            }
+          }
+        }
+      `;
+
+      operationLoader = {
+        get: jest.fn(() => getRequest(InnerQuery)),
+        load: jest.fn(() => Promise.resolve(getRequest(InnerQuery))),
+      };
+    });
+    afterEach(() => {
+      RelayFeatureFlags.ENABLE_REACT_FLIGHT_COMPONENT_FIELD = false;
+    });
+
+    it('returns available when the Flight field is fetched', () => {
+      const data = {
+        '1': {
+          __id: '1',
+          __typename: 'Story',
+          'flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+            {
+              __ref:
+                'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            },
+          id: '1',
+        },
+        '2': {
+          __id: '2',
+          __typename: 'User',
+          id: '2',
+          name: 'Lauren',
+        },
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+          {
+            __id: 'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            __typename: 'ReactFlightComponent',
+            executableDefinitions: [
+              {
+                module: {
+                  __dr: 'RelayFlightExampleQuery.graphql',
+                },
+                variables: {
+                  id: '2',
+                },
+              },
+            ],
+            tree: {
+              readRoot,
+            },
+          },
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {
+            __ref: '1',
+          },
+          'node(id:"2")': {
+            __ref: '2',
+          },
+        },
+      };
+      const source = RelayRecordSource.create(data);
+      const target = RelayRecordSource.create();
+      const status = check(
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(FlightQuery).operation,
+          ROOT_ID,
+          {
+            count: 10,
+            id: '1',
+          },
+        ),
+        [],
+        operationLoader,
+        defaultGetDataID,
+      );
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
+      expect(target.size()).toBe(0);
+    });
+
+    it('returns missing when the Flight field exists but has not been processed', () => {
+      const data = {
+        '1': {
+          __id: '1',
+          __typename: 'Story',
+          'flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+            {
+              __ref:
+                'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            },
+          id: '1',
+        },
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+          {
+            __id: 'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            __typename: 'ReactFlightComponent',
+          },
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {
+            __ref: '1',
+          },
+        },
+      };
+      const source = RelayRecordSource.create(data);
+      const target = RelayRecordSource.create();
+      const status = check(
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(FlightQuery).operation,
+          ROOT_ID,
+          {
+            count: 10,
+            id: '1',
+          },
+        ),
+        [],
+        operationLoader,
+        defaultGetDataID,
+      );
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
+      expect(target.size()).toBe(0);
+    });
+
+    it('returns missing when the Flight field is null in the store', () => {
+      const data = {
+        '1': {
+          __id: '1',
+          __typename: 'Story',
+          'flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+            {
+              __ref:
+                'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            },
+          id: '1',
+        },
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+          null,
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {
+            __ref: '1',
+          },
+        },
+      };
+      const source = RelayRecordSource.create(data);
+      const target = RelayRecordSource.create();
+      const status = check(
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(FlightQuery).operation,
+          ROOT_ID,
+          {
+            count: 10,
+            id: '1',
+          },
+        ),
+        [],
+        operationLoader,
+        defaultGetDataID,
+      );
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
+      expect(target.size()).toBe(0);
+    });
+
+    it('returns missing when the Flight field is undefined in the store', () => {
+      const data = {
+        '1': {
+          __id: '1',
+          __typename: 'Story',
+          'flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+            {
+              __ref:
+                'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            },
+          id: '1',
+        },
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+          undefined,
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {
+            __ref: '1',
+          },
+        },
+      };
+      const source = RelayRecordSource.create(data);
+      const target = RelayRecordSource.create();
+      const status = check(
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(FlightQuery).operation,
+          ROOT_ID,
+          {
+            count: 10,
+            id: '1',
+          },
+        ),
+        [],
+        operationLoader,
+        defaultGetDataID,
+      );
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
+      expect(target.size()).toBe(0);
+    });
+
+    it('returns missing when the linked ReactFlightClientResponseRecord is missing', () => {
+      const data = {
+        '1': {
+          __id: '1',
+          __typename: 'Story',
+          'flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+            {
+              __ref:
+                'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            },
+          id: '1',
+        },
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {
+            __ref: '1',
+          },
+        },
+      };
+      const source = RelayRecordSource.create(data);
+      const target = RelayRecordSource.create();
+      const status = check(
+        () => source,
+        () => target,
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(
+          getRequest(FlightQuery).operation,
+          ROOT_ID,
+          {
+            count: 10,
+            id: '1',
+          },
+        ),
+        [],
+        operationLoader,
+        defaultGetDataID,
+      );
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
+      expect(target.size()).toBe(0);
+    });
+  });
+
+  describe('ActorChange', () => {
+    beforeEach(() => {
+      Query = getRequest(graphql`
+        query DataCheckerTest10Query {
+          viewer {
+            newsFeed {
+              edges {
+                node @fb_actor_change {
+                  ...DataCheckerTest20Fragment
+                }
+              }
+            }
+          }
+        }
+      `);
+      graphql`
+        fragment DataCheckerTest20Fragment on FeedUnit {
+          id
+          message {
+            text
+          }
+        }
+      `;
+    });
+
+    it('should be able to handle multi-actor stores', () => {
+      const data = {
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          viewer: {__ref: 'client:root:viewer'},
+        },
+        'client:root:viewer': {
+          __id: 'client:root:viewer',
+          __typename: 'Viewer',
+          newsFeed: {__ref: 'client:root:viewer:newsFeed'},
+        },
+        'client:root:viewer:newsFeed': {
+          __id: 'client:root:viewer:newsFeed',
+          __typename: 'NewsFeedConnection',
+          edges: {
+            __refs: ['client:root:viewer:newsFeed:edges:0'],
+          },
+        },
+        'client:root:viewer:newsFeed:edges:0': {
+          __id: 'client:root:viewer:newsFeed:edges:0',
+          __typename: 'NewsFeedEdge',
+          node: {__ref: '1', __actorIdentifier: 'actor:1234'},
+        },
+        '1': {
+          __id: '1',
+          __typename: 'FeedUnit',
+          id: 1,
+        },
+      };
+      const source = RelayRecordSource.create(data);
+      const target = RelayRecordSource.create();
+      const status = check(
+        actorId => {
+          if (actorId === getActorIdentifier('actor:1234')) {
+            const typeID = generateTypeID('FeedUnit');
+            return RelayRecordSource.create({
+              '1': {
+                __id: '1',
+                __typename: 'FeedUnit',
+                id: 1,
+                actor_key: 'actor:1234',
+                message: {__ref: '1:message'},
+              },
+              '1:message': {
+                __id: '1:message',
+                __typename: 'Text',
+                text: 'Hello, Antonio',
+              },
+              [typeID]: {
+                __id: typeID,
+                __typename: TYPE_SCHEMA_TYPE,
+                __isFeedUnit: true,
+              },
+            });
+          }
+          return source;
+        },
+        actorId => {
+          if (actorId === getActorIdentifier('actor:1234')) {
+            return RelayRecordSource.create();
+          }
+          return target;
+        },
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {}),
+        [],
+        null,
+        defaultGetDataID,
+      );
+      expect(status).toEqual({
+        status: 'available',
+        mostRecentlyInvalidatedAt: null,
+      });
+      expect(target.size()).toBe(0);
+    });
+
+    it('should report missing data in multi-actor stores', () => {
+      const data = {
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          viewer: {__ref: 'client:root:viewer'},
+        },
+        'client:root:viewer': {
+          __id: 'client:root:viewer',
+          __typename: 'Viewer',
+          newsFeed: {__ref: 'client:root:viewer:newsFeed'},
+        },
+        'client:root:viewer:newsFeed': {
+          __id: 'client:root:viewer:newsFeed',
+          __typename: 'NewsFeedConnection',
+          edges: {
+            __refs: ['client:root:viewer:newsFeed:edges:0'],
+          },
+        },
+        'client:root:viewer:newsFeed:edges:0': {
+          __id: 'client:root:viewer:newsFeed:edges:0',
+          __typename: 'NewsFeedEdge',
+          node: {__ref: '1', __actorIdentifier: 'actor:1234'},
+        },
+        '1': {
+          __id: '1',
+          __typename: 'FeedUnit',
+          id: 1,
+        },
+      };
+      const source = RelayRecordSource.create(data);
+      const target = RelayRecordSource.create();
+      const status = check(
+        actorId => {
+          if (actorId === getActorIdentifier('actor:1234')) {
+            return RelayRecordSource.create({
+              '1': {
+                __id: '1',
+                __typename: 'FeedUnit',
+                id: 1,
+                actor_key: 'actor:1234',
+                message: {__ref: '1:message'},
+              },
+              '1:message': {
+                __id: '1:message',
+                __typename: 'Text',
+                // text: 'Hello, Antonio', --> this field is missing now
+              },
+            });
+          }
+          return source;
+        },
+        actorId => {
+          if (actorId === getActorIdentifier('actor:1234')) {
+            return RelayRecordSource.create();
+          }
+          return target;
+        },
+        INTERNAL_ACTOR_IDENTIFIER_DO_NOT_USE,
+        createNormalizationSelector(getRequest(Query).operation, ROOT_ID, {}),
+        [],
+        null,
+        defaultGetDataID,
+      );
+      expect(status).toEqual({
+        status: 'missing',
+        mostRecentlyInvalidatedAt: null,
+      });
+      expect(target.size()).toBe(0);
+    });
   });
 });

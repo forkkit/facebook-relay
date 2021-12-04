@@ -8,11 +8,14 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-import type {FragmentReference} from 'relay-runtime';
-declare export opaque type RelayModernFlowtest_user$ref: FragmentReference;
+import type {FragmentType} from 'relay-runtime';
+
+declare export opaque type RelayModernFlowtest_user$ref: FragmentType;
 export type RelayModernFlowtest_user = {|
   +name: ?string,
-  +$refType: RelayModernFlowtest_user$ref,
+  +$fragmentType: RelayModernFlowtest_user$ref,
 |};

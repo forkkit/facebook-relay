@@ -8,11 +8,9 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
-
-const RelayModernFragmentSpecResolver = require('./RelayModernFragmentSpecResolver');
-
-const warning = require('warning');
 
 import type {
   FragmentMap,
@@ -21,11 +19,15 @@ import type {
   RelayContext,
 } from './RelayStoreTypes';
 
+const RelayModernFragmentSpecResolver = require('./RelayModernFragmentSpecResolver');
+const warning = require('warning');
+
 function createFragmentSpecResolver(
   context: RelayContext,
   containerName: string,
   fragments: FragmentMap,
   props: Props,
+  rootIsQueryRenderer: boolean,
   callback?: () => void,
 ): FragmentSpecResolver {
   if (__DEV__) {
@@ -47,6 +49,7 @@ function createFragmentSpecResolver(
     fragments,
     props,
     callback,
+    rootIsQueryRenderer,
   );
 }
 

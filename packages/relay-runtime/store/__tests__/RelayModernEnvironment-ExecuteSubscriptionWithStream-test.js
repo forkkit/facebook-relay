@@ -9,24 +9,32 @@
  * @emails oncall+relay
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const RelayModernEnvironment = require('../RelayModernEnvironment');
-const RelayModernStore = require('../RelayModernStore');
+'use strict';
+import type {
+  RecordSourceProxy,
+  HandleFieldPayload,
+} from 'relay-runtime/store/RelayStoreTypes';
+
 const RelayNetwork = require('../../network/RelayNetwork');
 const RelayObservable = require('../../network/RelayObservable');
-const RelayRecordSource = require('../RelayRecordSource');
-
+const {getFragment, getRequest, graphql} = require('../../query/GraphQLTag');
+const RelayModernEnvironment = require('../RelayModernEnvironment');
 const {
   createOperationDescriptor,
 } = require('../RelayModernOperationDescriptor');
 const {createReaderSelector} = require('../RelayModernSelector');
-const {generateAndCompile} = require('relay-test-utils-internal');
+const RelayModernStore = require('../RelayModernStore');
+const RelayRecordSource = require('../RelayRecordSource');
+const {disallowWarnings} = require('relay-test-utils-internal');
+
+disallowWarnings();
 
 describe('executeSubscrption() with @stream', () => {
   let callbacks;
   let feedbackFragment;
-  let feedbackID;
+  const feedbackID = '1';
   let complete;
   let dataSource;
   let environment;
@@ -45,41 +53,37 @@ describe('executeSubscrption() with @stream', () => {
   let queryVariables;
 
   beforeEach(() => {
-    jest.resetModules();
-    feedbackID = '1';
-
-    ({
-      FeedbackFragment: feedbackFragment,
-      FeedbackQuery: feedbackQuery,
-      CommentCreateSubscription: subscription,
-    } = generateAndCompile(`
-        subscription CommentCreateSubscription($input: CommentCreateSubscriptionInput!) {
-          commentCreateSubscribe(input: $input) {
-            feedback {
-              ...FeedbackFragment
-            }
+    subscription = getRequest(graphql`
+      subscription RelayModernEnvironmentExecuteSubscriptionWithStreamTestCommentCreateSubscription(
+        $input: CommentCreateSubscriptionInput!
+      ) {
+        commentCreateSubscribe(input: $input) {
+          feedback {
+            ...RelayModernEnvironmentExecuteSubscriptionWithStreamTestFeedbackFragment
           }
         }
+      }
+    `);
 
-        fragment FeedbackFragment on Feedback {
-          id
-          actors @stream(label: "actors", initial_count: 0) {
-            name @__clientField(handle: "name_handler")
-          }
-        }
-
-        # keep in sync with above
-        fragment ActorFragment on Actor {
+    feedbackFragment = getFragment(graphql`
+      fragment RelayModernEnvironmentExecuteSubscriptionWithStreamTestFeedbackFragment on Feedback {
+        id
+        actors @stream(label: "actors", initial_count: 0) {
           name @__clientField(handle: "name_handler")
         }
+      }
+    `);
 
-        query FeedbackQuery($id: ID!) {
-          node(id: $id) {
-            id
-            ...FeedbackFragment
-          }
+    feedbackQuery = getRequest(graphql`
+      query RelayModernEnvironmentExecuteSubscriptionWithStreamTestFeedbackQuery(
+        $id: ID!
+      ) {
+        node(id: $id) {
+          id
+          ...RelayModernEnvironmentExecuteSubscriptionWithStreamTestFeedbackFragment
         }
-      `));
+      }
+    `);
     variables = {
       input: {
         clientMutationId: '0',
@@ -93,7 +97,7 @@ describe('executeSubscrption() with @stream', () => {
     queryOperation = createOperationDescriptor(feedbackQuery, queryVariables);
 
     const NameHandler = {
-      update(storeProxy, payload) {
+      update(storeProxy: RecordSourceProxy, payload: HandleFieldPayload) {
         const record = storeProxy.get(payload.dataID);
         if (record != null) {
           const markup = record.getValue(payload.fieldKey);
@@ -173,7 +177,7 @@ describe('executeSubscrption() with @stream', () => {
     expect(
       environment
         .getOperationTracker()
-        .getPromiseForPendingOperationsAffectingOwner(queryOperation.request),
+        .getPendingOperationsAffectingOwner(queryOperation.request),
     ).not.toBe(null);
   });
 
@@ -205,7 +209,8 @@ describe('executeSubscrption() with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteSubscriptionWithStreamTestFeedbackFragment$stream$actors',
       path: ['commentCreateSubscribe', 'feedback', 'actors', 0],
     });
     jest.runAllTimers();
@@ -230,7 +235,7 @@ describe('executeSubscrption() with @stream', () => {
     expect(
       environment
         .getOperationTracker()
-        .getPromiseForPendingOperationsAffectingOwner(queryOperation.request),
+        .getPendingOperationsAffectingOwner(queryOperation.request),
     ).not.toBe(null);
 
     dataSource.next({
@@ -239,7 +244,8 @@ describe('executeSubscrption() with @stream', () => {
         id: '3',
         name: 'Bob',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteSubscriptionWithStreamTestFeedbackFragment$stream$actors',
       path: ['commentCreateSubscribe', 'feedback', 'actors', 1],
       extensions: {
         is_final: true,
@@ -262,7 +268,7 @@ describe('executeSubscrption() with @stream', () => {
     expect(
       environment
         .getOperationTracker()
-        .getPromiseForPendingOperationsAffectingOwner(queryOperation.request),
+        .getPendingOperationsAffectingOwner(queryOperation.request),
     ).toBe(null);
   });
 
@@ -294,7 +300,8 @@ describe('executeSubscrption() with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteSubscriptionWithStreamTestFeedbackFragment$stream$actors',
       path: ['commentCreateSubscribe', 'feedback', 'actors', 0],
       extensions: {
         is_final: true,
@@ -312,7 +319,7 @@ describe('executeSubscrption() with @stream', () => {
     expect(
       environment
         .getOperationTracker()
-        .getPromiseForPendingOperationsAffectingOwner(queryOperation.request),
+        .getPendingOperationsAffectingOwner(queryOperation.request),
     ).toBe(null);
 
     dataSource.complete();
@@ -327,7 +334,7 @@ describe('executeSubscrption() with @stream', () => {
     expect(
       environment
         .getOperationTracker()
-        .getPromiseForPendingOperationsAffectingOwner(queryOperation.request),
+        .getPendingOperationsAffectingOwner(queryOperation.request),
     ).toBe(null);
   });
 
@@ -365,7 +372,7 @@ describe('executeSubscrption() with @stream', () => {
     expect(
       environment
         .getOperationTracker()
-        .getPromiseForPendingOperationsAffectingOwner(queryOperation.request),
+        .getPendingOperationsAffectingOwner(queryOperation.request),
     ).toBe(null);
   });
 
@@ -405,7 +412,7 @@ describe('executeSubscrption() with @stream', () => {
     expect(
       environment
         .getOperationTracker()
-        .getPromiseForPendingOperationsAffectingOwner(queryOperation.request),
+        .getPendingOperationsAffectingOwner(queryOperation.request),
     ).toBe(null);
   });
 });

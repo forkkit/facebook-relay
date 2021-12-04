@@ -8,22 +8,23 @@
  * @flow strict-local
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const React = require('react');
+import type {Snapshot, Variables} from 'relay-runtime';
+
 const ReactRelayContext = require('../ReactRelayContext');
-
 const invariant = require('invariant');
-
+const React = require('react');
 const {createOperationDescriptor, getRequest} = require('relay-runtime');
-
-import type {Variables, Snapshot} from 'relay-runtime';
 
 type Props = {
   environment: $FlowFixMe,
   query: $FlowFixMe,
   variables: Variables,
   children: React.Element<$FlowFixMe>,
+  ...
 };
 
 class RelayTestRenderer extends React.Component<Props, $FlowFixMe> {
@@ -69,7 +70,7 @@ class RelayTestRenderer extends React.Component<Props, $FlowFixMe> {
         {React.cloneElement(
           this.props.children,
           newProps,
-          // $FlowFixMe: error found when enabling flow for this file.
+          // $FlowFixMe[prop-missing] : error found when enabling flow for this file.
           this.props.children.children,
         )}
       </ReactRelayContext.Provider>

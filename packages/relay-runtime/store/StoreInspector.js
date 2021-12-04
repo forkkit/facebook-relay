@@ -9,6 +9,8 @@
  * @emails oncall+relay
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
 import type {IEnvironment, RecordSource} from '../store/RelayStoreTypes';
@@ -54,7 +56,7 @@ if (__DEV__) {
     const keyStyle = {style: 'rgb(136, 19, 145)'};
     const nullStyle = {style: 'color: #777'};
 
-    const reference = (object, config) => {
+    const reference = (object, config: void) => {
       return object == null
         ? ['span', nullStyle, 'undefined']
         : ['object', {object, config}];
@@ -98,7 +100,7 @@ if (__DEV__) {
         }
         return renderRecordHeader(obj);
       },
-      hasBody(obj) {
+      hasBody(obj: $FlowFixMe) {
         return true;
       },
       body(obj) {
@@ -145,6 +147,7 @@ if (__DEV__) {
               return getWrappedRecord(source, value.__ref);
             }
             if (Array.isArray(value.__refs)) {
+              // $FlowFixMe[incompatible-call]
               return value.__refs.map(ref => getWrappedRecord(source, ref));
             }
           }

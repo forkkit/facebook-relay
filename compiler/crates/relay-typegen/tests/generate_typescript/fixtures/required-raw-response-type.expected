@@ -1,0 +1,25 @@
+==================================== INPUT ====================================
+query MyQuery @raw_response_type {
+  me @required(action: LOG) {
+    id @required(action: LOG)
+    name @required(action: LOG)
+  }
+}
+==================================== OUTPUT ===================================
+export type MyQuery$variables = {};
+export type MyQuery$data = {
+  readonly me: {
+    readonly id: string;
+    readonly name: string;
+  };
+} | null;
+export type MyQuery$rawResponse = {
+  readonly me: {
+    readonly id: string;
+    readonly name: string | null;
+  } | null;
+};
+export type MyQuery = {
+  variables: MyQuery$variables;
+  response: MyQuery$data;
+};

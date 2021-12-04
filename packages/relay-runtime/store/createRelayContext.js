@@ -8,12 +8,14 @@
  * @format
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const invariant = require('invariant');
+'use strict';
 
 import type {RelayContext} from './RelayStoreTypes.js';
 import typeof {createContext} from 'react';
+
+const invariant = require('invariant');
 
 // Ideally, we'd just import the type of the react module, but this causes Flow
 // problems.
@@ -29,11 +31,14 @@ let firstReact: ?React;
 function createRelayContext(react: React): React$Context<RelayContext | null> {
   if (!relayContext) {
     relayContext = react.createContext(null);
+    if (__DEV__) {
+      relayContext.displayName = 'RelayContext';
+    }
     firstReact = react;
   }
   invariant(
     react === firstReact,
-    '[createRelayContext]: You passing a different instance of React',
+    '[createRelayContext]: You are passing a different instance of React',
     react.version,
   );
   return relayContext;

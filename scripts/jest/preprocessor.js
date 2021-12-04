@@ -9,9 +9,10 @@
 
 'use strict';
 
-const babel = require('@babel/core');
-const createCacheKeyFunction = require('fbjs-scripts/jest/createCacheKeyFunction');
 const getBabelOptions = require('../getBabelOptions');
+const babel = require('@babel/core');
+const createCacheKeyFunction =
+  require('@jest/create-cache-key-function').default;
 const path = require('path');
 
 const babelOptions = getBabelOptions({
@@ -19,6 +20,7 @@ const babelOptions = getBabelOptions({
   // Tests use a Promise polfill so they can use jest.runAllTimers().
   autoImport: true,
   plugins: [
+    './dist/babel-plugin-relay',
     '@babel/plugin-transform-flow-strip-types',
     '@babel/plugin-transform-runtime',
     '@babel/plugin-proposal-nullish-coalescing-operator',
@@ -29,7 +31,7 @@ const babelOptions = getBabelOptions({
 });
 
 module.exports = {
-  process: function(src, filename) {
+  process: function (src, filename) {
     const options = Object.assign({}, babelOptions, {
       filename: filename,
       retainLines: true,

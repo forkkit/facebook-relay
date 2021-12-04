@@ -8,10 +8,12 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const React = require('react');
 const ReactRelayContext = require('./ReactRelayContext');
+const React = require('react');
 
 function ReactRelayFragmentMockRenderer(props: Object): React.Node {
   return (

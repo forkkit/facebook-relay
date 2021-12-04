@@ -9,20 +9,29 @@
  * @emails oncall+relay
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const RelayModernEnvironment = require('../RelayModernEnvironment');
-const RelayModernStore = require('../RelayModernStore');
+'use strict';
+import type {
+  Variables,
+  CacheConfig,
+} from 'relay-runtime/util/RelayRuntimeTypes';
+import type {RequestParameters} from 'relay-runtime/util/RelayConcreteNode';
+
 const RelayNetwork = require('../../network/RelayNetwork');
 const RelayObservable = require('../../network/RelayObservable');
-const RelayRecordSource = require('../RelayRecordSource');
-
+const {getRequest, graphql} = require('../../query/GraphQLTag');
+const RelayModernEnvironment = require('../RelayModernEnvironment');
 const {
   createOperationDescriptor,
 } = require('../RelayModernOperationDescriptor');
 const {createReaderSelector} = require('../RelayModernSelector');
+const RelayModernStore = require('../RelayModernStore');
+const RelayRecordSource = require('../RelayRecordSource');
 const {ROOT_ID} = require('../RelayStoreUtils');
-const {generateAndCompile} = require('relay-test-utils-internal');
+const {disallowWarnings} = require('relay-test-utils-internal');
+
+disallowWarnings();
 
 describe('execute() with network that returns optimistic response', () => {
   let callbacks;
@@ -39,18 +48,18 @@ describe('execute() with network that returns optimistic response', () => {
   let variables;
 
   beforeEach(() => {
-    jest.resetModules();
-
-    ({ActorQuery: query} = generateAndCompile(`
-        query ActorQuery($fetchSize: Boolean!) {
-          me {
-            name
-            profilePicture(size: 42) @include(if: $fetchSize) {
-              uri
-            }
+    query = getRequest(graphql`
+      query RelayModernEnvironmentExecuteWithOptimisticResponseTestActorQuery(
+        $fetchSize: Boolean!
+      ) {
+        me {
+          name
+          profilePicture(size: 42) @include(if: $fetchSize) {
+            uri
           }
         }
-      `));
+      }
+    `);
     variables = {fetchSize: false};
     operation = createOperationDescriptor(query, {
       ...variables,
@@ -61,7 +70,11 @@ describe('execute() with network that returns optimistic response', () => {
     error = jest.fn();
     next = jest.fn();
     callbacks = {complete, error, next};
-    fetch = (_query, _variables, _cacheConfig) => {
+    fetch = (
+      _query: RequestParameters,
+      _variables: Variables,
+      _cacheConfig: CacheConfig,
+    ) => {
       return RelayObservable.create(sink => {
         dataSource = sink;
       });
@@ -212,7 +225,7 @@ describe('execute() with network that returns optimistic response', () => {
         name: 'Joe',
       },
     });
-    expect(callback.mock.calls[1][0].data).toEqual(undefined);
+    expect(callback.mock.calls[1][0].data).toEqual({me: undefined});
   });
 
   it('reverts optimistic response on error.', () => {
@@ -256,7 +269,7 @@ describe('execute() with network that returns optimistic response', () => {
         name: 'Joe',
       },
     });
-    expect(callback.mock.calls[1][0].data).toEqual(undefined);
+    expect(callback.mock.calls[1][0].data).toEqual({me: undefined});
   });
 
   it('reverts optimistic response if unsubscribed.', () => {
@@ -298,7 +311,7 @@ describe('execute() with network that returns optimistic response', () => {
         name: 'Joe',
       },
     });
-    expect(callback.mock.calls[1][0].data).toEqual(undefined);
+    expect(callback.mock.calls[1][0].data).toEqual({me: undefined});
   });
 
   it('calls error() if optimistic response is missing data', () => {
@@ -332,8 +345,67 @@ describe('execute() with network that returns optimistic response', () => {
     expect(complete).toBeCalledTimes(0);
     expect(error).toBeCalledTimes(1);
     expect(error.mock.calls[0][0].message).toContain(
-      'No data returned for operation `ActorQuery`',
+      'No data returned for operation `RelayModernEnvironmentExecuteWithOptimisticResponseTestActorQuery`',
     );
     expect(callback).toBeCalledTimes(0);
+  });
+
+  it('does fill missing fields from server-sent optimistic response with nulls when treatMissingFieldsAsNull is enabled', () => {
+    query = getRequest(graphql`
+      query RelayModernEnvironmentExecuteWithOptimisticResponseTestActor2Query {
+        me {
+          name
+          lastName
+        }
+      }
+    `);
+    operation = createOperationDescriptor(query, {});
+
+    environment = new RelayModernEnvironment({
+      network: RelayNetwork.create(fetch),
+      store,
+      treatMissingFieldsAsNull: true,
+    });
+
+    const selector = createReaderSelector(
+      query.fragment,
+      ROOT_ID,
+      {},
+      operation.request,
+    );
+
+    const snapshot = environment.lookup(selector);
+    const callback = jest.fn();
+    environment.subscribe(snapshot, callback);
+
+    environment.execute({operation}).subscribe(callbacks);
+    dataSource.next({
+      data: {
+        me: {
+          id: '842472',
+          __typename: 'User',
+          name: 'Joe',
+          // lastName is missing in the response
+        },
+      },
+      extensions: {
+        isOptimistic: true,
+      },
+    });
+    jest.runAllTimers();
+
+    expect(next.mock.calls.length).toBe(1);
+    expect(complete).not.toBeCalled();
+    expect(error).not.toBeCalled();
+    expect(callback.mock.calls.length).toBe(1);
+    expect(callback.mock.calls[0][0].data).toEqual({
+      me: {
+        name: 'Joe',
+        // this field becomes null since treatMissingFieldsAsNull is enabled, which affects server-sent optimistic responses
+        lastName: null,
+      },
+    });
+    // and thus the snapshot does not have missing data
+    expect(callback.mock.calls[0][0].isMissingData).toEqual(false);
   });
 });

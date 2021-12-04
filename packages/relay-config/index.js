@@ -8,11 +8,11 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
 const cosmiconfig = require('cosmiconfig');
-
-import type {Config} from '../relay-compiler/bin/RelayCompilerMain';
 
 const explorer = cosmiconfig('relay', {
   searchPlaces: ['relay.config.js', 'relay.config.json', 'package.json'],
@@ -27,7 +27,7 @@ const explorer = cosmiconfig('relay', {
   },
 });
 
-function loadConfig(): ?Config {
+function loadConfig(): $FlowFixMe {
   const result = explorer.searchSync();
   if (result) {
     return result.config;

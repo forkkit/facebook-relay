@@ -1,0 +1,63 @@
+==================================== INPUT ====================================
+query ExampleQuery($id: ID!) @raw_response_type {
+  node(id: $id) {
+    username
+    ...FriendFragment
+    ... @include(if: false) {
+      friends(first: 0) {
+        count
+      }
+    }
+  }
+}
+
+fragment FriendFragment on User {
+  ... @include(if: false) {
+    name
+    lastName
+    feedback {
+      id
+      name
+    }
+  }
+}
+==================================== OUTPUT ===================================
+import { FragmentRefs } from "relay-runtime";
+export type ExampleQuery$variables = {
+  id: string;
+};
+export type ExampleQuery$data = {
+  readonly node: {
+    readonly username: string | null;
+    readonly friends?: {
+      readonly count: number | null;
+    } | null;
+    readonly " $fragmentSpreads": FragmentRefs<"FriendFragment">;
+  } | null;
+};
+export type ExampleQuery$rawResponse = {
+  readonly node: {
+    readonly __typename: string;
+    readonly username: string | null;
+    readonly id: string;
+  } | null;
+};
+export type ExampleQuery = {
+  variables: ExampleQuery$variables;
+  response: ExampleQuery$data;
+};
+-------------------------------------------------------------------------------
+import { FragmentRefs } from "relay-runtime";
+export type FriendFragment$data = {
+  readonly name?: string | null;
+  readonly lastName?: string | null;
+  readonly feedback?: {
+    readonly id: string;
+    readonly name: string | null;
+  } | null;
+  readonly " $fragmentType": "FriendFragment";
+};
+export type FriendFragment$key = {
+  readonly " $data"?: FriendFragment$data;
+  readonly " $fragmentSpreads": FragmentRefs<"FriendFragment">;
+};

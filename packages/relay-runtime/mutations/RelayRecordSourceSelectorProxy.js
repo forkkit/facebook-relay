@@ -8,13 +8,11 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const invariant = require('invariant');
-
-const {getStorageKey} = require('../store/RelayStoreUtils');
-
-import type {ConnectionID} from '../store/RelayConnection';
+import type {GraphQLTaggedNode} from '../query/GraphQLTag';
 import type {
   RecordProxy,
   RecordSourceProxy,
@@ -22,8 +20,14 @@ import type {
   SingularReaderSelector,
 } from '../store/RelayStoreTypes';
 import type {ReaderLinkedField} from '../util/ReaderNode';
-import type {DataID, Variables} from '../util/RelayRuntimeTypes';
+import type {DataID, OperationType} from '../util/RelayRuntimeTypes';
 import type RelayRecordSourceMutator from './RelayRecordSourceMutator';
+
+const {ROOT_TYPE, getStorageKey} = require('../store/RelayStoreUtils');
+const {
+  readUpdatableQuery_EXPERIMENTAL,
+} = require('./readUpdatableQuery_EXPERIMENTAL');
+const invariant = require('invariant');
 
 /**
  * @internal
@@ -64,15 +68,28 @@ class RelayRecordSourceSelectorProxy implements RecordSourceSelectorProxy {
     return this.__recordSource.getRoot();
   }
 
+  getOperationRoot(): RecordProxy {
+    let root = this.__recordSource.get(this._readSelector.dataID);
+    if (!root) {
+      root = this.__recordSource.create(this._readSelector.dataID, ROOT_TYPE);
+    }
+    return root;
+  }
+
   _getRootField(
     selector: SingularReaderSelector,
     fieldName: string,
     plural: boolean,
   ): ReaderLinkedField {
-    const field = selector.node.selections.find(
+    let field = selector.node.selections.find(
       selection =>
-        selection.kind === 'LinkedField' && selection.name === fieldName,
+        (selection.kind === 'LinkedField' && selection.name === fieldName) ||
+        (selection.kind === 'RequiredField' &&
+          selection.field.name === fieldName),
     );
+    if (field && field.kind === 'RequiredField') {
+      field = field.field;
+    }
     invariant(
       field && field.kind === 'LinkedField',
       'RelayRecordSourceSelectorProxy#getRootField(): Cannot find root ' +
@@ -93,27 +110,24 @@ class RelayRecordSourceSelectorProxy implements RecordSourceSelectorProxy {
   getRootField(fieldName: string): ?RecordProxy {
     const field = this._getRootField(this._readSelector, fieldName, false);
     const storageKey = getStorageKey(field, this._readSelector.variables);
-    return this.getRoot().getLinkedRecord(storageKey);
+    return this.getOperationRoot().getLinkedRecord(storageKey);
   }
 
   getPluralRootField(fieldName: string): ?Array<?RecordProxy> {
     const field = this._getRootField(this._readSelector, fieldName, true);
     const storageKey = getStorageKey(field, this._readSelector.variables);
-    return this.getRoot().getLinkedRecords(storageKey);
+    return this.getOperationRoot().getLinkedRecords(storageKey);
   }
 
-  insertConnectionEdge_UNSTABLE(
-    connectionID: ConnectionID,
-    args: Variables,
-    edge: RecordProxy,
-  ): void {
-    this.__mutator.appendConnectionEvent_UNSTABLE({
-      kind: 'insert',
-      args,
-      connectionID,
-      edgeID: edge.getDataID(),
-      request: this._readSelector.owner,
-    });
+  invalidateStore(): void {
+    this.__recordSource.invalidateStore();
+  }
+
+  readUpdatableQuery_EXPERIMENTAL<TQuery: OperationType>(
+    query: GraphQLTaggedNode,
+    variables: TQuery['variables'],
+  ): TQuery['response'] {
+    return readUpdatableQuery_EXPERIMENTAL(query, variables, this);
   }
 }
 

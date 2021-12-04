@@ -12,32 +12,32 @@
 
 jest.mock('scheduler', () => require('scheduler/unstable_mock'));
 
-const React = require('react');
-const Scheduler = require('scheduler');
 const ReactRelayContext = require('../ReactRelayContext');
 const ReactRelayQueryRenderer = require('../ReactRelayQueryRenderer');
-const ReactTestRenderer = require('react-test-renderer');
-
+const ReactRelayQueryRendererContext = require('../ReactRelayQueryRendererContext');
 const readContext = require('../readContext');
-
+const React = require('react');
+const ReactTestRenderer = require('react-test-renderer');
+const {graphql} = require('relay-runtime');
 const {
-  createOperationDescriptor,
   Environment,
   Network,
   Observable,
   RecordSource,
-  Store,
   ROOT_ID,
+  Store,
+  createOperationDescriptor,
 } = require('relay-runtime');
 const {ROOT_TYPE} = require('relay-runtime/store/RelayStoreUtils');
 const {
   createMockEnvironment,
-  generateAndCompile,
   simpleClone,
 } = require('relay-test-utils-internal');
+const Scheduler = require('scheduler');
 
 describe('ReactRelayQueryRenderer', () => {
   let TestQuery;
+  let NextQuery;
 
   let cacheConfig;
   let environment;
@@ -87,18 +87,29 @@ describe('ReactRelayQueryRenderer', () => {
 
     environment = createMockEnvironment();
     store = environment.getStore();
-    ({TestQuery} = generateAndCompile(`
-      query TestQuery($id: ID = "<default>") {
+    TestQuery = graphql`
+      query ReactRelayQueryRendererTestQuery($id: ID = "<default>") {
         node(id: $id) {
           id
-          ...TestFragment
+          ...ReactRelayQueryRendererTestFragment
         }
       }
+    `;
+    NextQuery = graphql`
+      query ReactRelayQueryRendererTestNextQuery($id: ID!) {
+        node(id: $id) {
+          ... on User {
+            name
+          }
+        }
+      }
+    `;
 
-      fragment TestFragment on User {
+    graphql`
+      fragment ReactRelayQueryRendererTestFragment on User {
         name
       }
-    `));
+    `;
 
     render = jest.fn(() => <div />);
     variables = {id: '4'};
@@ -156,6 +167,7 @@ describe('ReactRelayQueryRenderer', () => {
           }
           const renderer = ReactTestRenderer.create(<Example />, {
             unstable_isConcurrent: true,
+            unstable_concurrentUpdatesByDefault: true,
           });
 
           // Flush some of the changes, but don't commit
@@ -225,6 +237,7 @@ describe('ReactRelayQueryRenderer', () => {
           }
           const renderer = ReactTestRenderer.create(<Example />, {
             unstable_isConcurrent: true,
+            unstable_concurrentUpdatesByDefault: true,
           });
           const owner = createOperationDescriptor(TestQuery, variables);
 
@@ -239,10 +252,11 @@ describe('ReactRelayQueryRenderer', () => {
                 id: '4',
 
                 __fragments: {
-                  TestFragment: {},
+                  ReactRelayQueryRendererTestFragment: {},
                 },
 
                 __fragmentOwner: owner.request,
+                __isWithinUnmatchedTypeRefinement: false,
                 __id: '4',
               },
             },
@@ -263,10 +277,11 @@ describe('ReactRelayQueryRenderer', () => {
                 id: '4',
 
                 __fragments: {
-                  TestFragment: {},
+                  ReactRelayQueryRendererTestFragment: {},
                 },
 
                 __fragmentOwner: owner.request,
+                __isWithinUnmatchedTypeRefinement: false,
                 __id: '4',
               },
             },
@@ -310,6 +325,7 @@ describe('ReactRelayQueryRenderer', () => {
           }
           const renderer = ReactTestRenderer.create(<Example />, {
             unstable_isConcurrent: true,
+            unstable_concurrentUpdatesByDefault: true,
           });
           const owner = createOperationDescriptor(TestQuery, variables);
 
@@ -324,10 +340,11 @@ describe('ReactRelayQueryRenderer', () => {
                 id: '4',
 
                 __fragments: {
-                  TestFragment: {},
+                  ReactRelayQueryRendererTestFragment: {},
                 },
 
                 __fragmentOwner: owner.request,
+                __isWithinUnmatchedTypeRefinement: false,
                 __id: '4',
               },
             },
@@ -348,10 +365,11 @@ describe('ReactRelayQueryRenderer', () => {
                 id: '4',
 
                 __fragments: {
-                  TestFragment: {},
+                  ReactRelayQueryRendererTestFragment: {},
                 },
 
                 __fragmentOwner: owner.request,
+                __isWithinUnmatchedTypeRefinement: false,
                 __id: '4',
               },
             },
@@ -401,10 +419,11 @@ describe('ReactRelayQueryRenderer', () => {
               id: '4',
 
               __fragments: {
-                TestFragment: {},
+                ReactRelayQueryRendererTestFragment: {},
               },
 
               __fragmentOwner: firstOwner.request,
+              __isWithinUnmatchedTypeRefinement: false,
               __id: '4',
             },
           },
@@ -460,10 +479,11 @@ describe('ReactRelayQueryRenderer', () => {
               id: '6',
 
               __fragments: {
-                TestFragment: {},
+                ReactRelayQueryRendererTestFragment: {},
               },
 
               __fragmentOwner: thirdOwner.request,
+              __isWithinUnmatchedTypeRefinement: false,
               __id: '6',
             },
           },
@@ -536,10 +556,11 @@ describe('ReactRelayQueryRenderer', () => {
             id: '4',
 
             __fragments: {
-              TestFragment: {},
+              ReactRelayQueryRendererTestFragment: {},
             },
 
             __fragmentOwner: owner.request,
+            __isWithinUnmatchedTypeRefinement: false,
             __id: '4',
           },
         },
@@ -571,10 +592,11 @@ describe('ReactRelayQueryRenderer', () => {
             id: '4',
 
             __fragments: {
-              TestFragment: {},
+              ReactRelayQueryRendererTestFragment: {},
             },
 
             __fragmentOwner: owner.request,
+            __isWithinUnmatchedTypeRefinement: false,
             __id: '4',
           },
         },
@@ -748,9 +770,10 @@ describe('ReactRelayQueryRenderer', () => {
           node: {
             id: '<default>',
             __fragments: {
-              TestFragment: {},
+              ReactRelayQueryRendererTestFragment: {},
             },
             __fragmentOwner: owner.request,
+            __isWithinUnmatchedTypeRefinement: false,
             __id: '<default>',
           },
         },
@@ -783,6 +806,42 @@ describe('ReactRelayQueryRenderer', () => {
 
       expect(relayContext).toBe(previousContext);
       expect(relayContext.environment).toBe(environment);
+    });
+  });
+
+  describe('QueryRenderer context', () => {
+    let queryRendererContext;
+    let ContextGetter;
+
+    beforeEach(() => {
+      ContextGetter = () => {
+        queryRendererContext = readContext(ReactRelayQueryRendererContext);
+        return null;
+      };
+
+      render = jest.fn(() => <ContextGetter />);
+    });
+
+    it('sets QueryRenderer context', () => {
+      expect.assertions(1);
+      ReactTestRenderer.create(
+        <ReactRelayQueryRenderer
+          environment={environment}
+          query={TestQuery}
+          render={render}
+          variables={variables}
+        />,
+      );
+      environment.mock.resolve(TestQuery, response);
+
+      expect(queryRendererContext.rootIsQueryRenderer).toBe(true);
+    });
+
+    it('default context', () => {
+      expect.assertions(1);
+      ReactTestRenderer.create(<ContextGetter />);
+
+      expect(queryRendererContext.rootIsQueryRenderer).toBe(false);
     });
   });
 
@@ -1066,10 +1125,11 @@ describe('ReactRelayQueryRenderer', () => {
             id: '4',
 
             __fragments: {
-              TestFragment: {},
+              ReactRelayQueryRendererTestFragment: {},
             },
 
             __fragmentOwner: owner.request,
+            __isWithinUnmatchedTypeRefinement: false,
             __id: '4',
           },
         },
@@ -1123,11 +1183,12 @@ describe('ReactRelayQueryRenderer', () => {
                   id: '4',
 
                   __fragments: {
-                    TestFragment: {},
+                    ReactRelayQueryRendererTestFragment: {},
                   },
 
                   __fragmentOwner: owner.request,
                   __id: '4',
+                  __isWithinUnmatchedTypeRefinement: false,
                 },
               },
               retry: expect.any(Function),
@@ -1143,10 +1204,11 @@ describe('ReactRelayQueryRenderer', () => {
                   id: '4',
 
                   __fragments: {
-                    TestFragment: {},
+                    ReactRelayQueryRendererTestFragment: {},
                   },
 
                   __fragmentOwner: owner.request,
+                  __isWithinUnmatchedTypeRefinement: false,
                   __id: '4',
                 },
               },
@@ -1197,10 +1259,11 @@ describe('ReactRelayQueryRenderer', () => {
             id: '4',
 
             __fragments: {
-              TestFragment: {},
+              ReactRelayQueryRendererTestFragment: {},
             },
 
             __fragmentOwner: owner.request,
+            __isWithinUnmatchedTypeRefinement: false,
             __id: '4',
           },
         },
@@ -1224,21 +1287,10 @@ describe('ReactRelayQueryRenderer', () => {
     });
   });
   describe('when props change during a fetch', () => {
-    let NextQuery;
     let renderer;
     let nextProps;
 
     beforeEach(() => {
-      ({NextQuery} = generateAndCompile(`
-        query NextQuery($id: ID!) {
-          node(id: $id) {
-            ... on User {
-              name
-            }
-          }
-        }
-      `));
-
       variables = {id: '4'};
       renderer = ReactTestRenderer.create(
         <PropsSetter>
@@ -1278,11 +1330,15 @@ describe('ReactRelayQueryRenderer', () => {
       environment.mockClear();
       renderer.getInstance().setProps(nextProps);
       environment.mock.resolve(NextQuery, response); // trigger retain
-      expect(environment.retain.mock.calls[0][0].dataID).toBe('client:root');
-      expect(environment.retain.mock.calls[0][0].node).toBe(
+      expect(environment.retain.mock.calls[0][0].root.dataID).toBe(
+        'client:root',
+      );
+      expect(environment.retain.mock.calls[0][0].root.node).toBe(
         NextQuery.operation,
       );
-      expect(environment.retain.mock.calls[0][0].variables).toEqual(variables);
+      expect(environment.retain.mock.calls[0][0].root.variables).toEqual(
+        variables,
+      );
     });
 
     it('renders a pending state', () => {
@@ -1325,22 +1381,11 @@ describe('ReactRelayQueryRenderer', () => {
   });
 
   describe('when props change after a fetch fails', () => {
-    let NextQuery;
     let error;
     let renderer;
     let nextProps;
 
     beforeEach(() => {
-      ({NextQuery} = generateAndCompile(`
-        query NextQuery($id: ID!) {
-          node(id: $id) {
-            ... on User {
-              name
-            }
-          }
-        }
-      `));
-
       variables = {id: '4'};
       renderer = ReactTestRenderer.create(
         <PropsSetter>
@@ -1381,11 +1426,15 @@ describe('ReactRelayQueryRenderer', () => {
         },
       });
       expect(environment.retain.mock.calls.length).toBe(1);
-      expect(environment.retain.mock.calls[0][0].dataID).toBe('client:root');
-      expect(environment.retain.mock.calls[0][0].node).toBe(
+      expect(environment.retain.mock.calls[0][0].root.dataID).toBe(
+        'client:root',
+      );
+      expect(environment.retain.mock.calls[0][0].root.node).toBe(
         NextQuery.operation,
       );
-      expect(environment.retain.mock.calls[0][0].variables).toEqual(variables);
+      expect(environment.retain.mock.calls[0][0].root.variables).toEqual(
+        variables,
+      );
       expect(environment.retain.mock.dispose).not.toBeCalled();
     });
 
@@ -1409,21 +1458,10 @@ describe('ReactRelayQueryRenderer', () => {
   });
 
   describe('when props change after a fetch succeeds', () => {
-    let NextQuery;
     let renderer;
     let nextProps;
 
     beforeEach(() => {
-      ({NextQuery} = generateAndCompile(`
-        query NextQuery($id: ID!) {
-          node(id: $id) {
-            ... on User {
-              name
-            }
-          }
-        }
-      `));
-
       renderer = ReactTestRenderer.create(
         <PropsSetter>
           <ReactRelayQueryRenderer
@@ -1478,11 +1516,15 @@ describe('ReactRelayQueryRenderer', () => {
         },
       });
       expect(environment.retain).toBeCalled();
-      expect(environment.retain.mock.calls[0][0].dataID).toBe('client:root');
-      expect(environment.retain.mock.calls[0][0].node).toBe(
+      expect(environment.retain.mock.calls[0][0].root.dataID).toBe(
+        'client:root',
+      );
+      expect(environment.retain.mock.calls[0][0].root.node).toBe(
         NextQuery.operation,
       );
-      expect(environment.retain.mock.calls[0][0].variables).toEqual(variables);
+      expect(environment.retain.mock.calls[0][0].root.variables).toEqual(
+        variables,
+      );
       expect(prevDispose).toBeCalled();
       expect(environment.retain.mock.dispose).not.toBeCalled();
     });
@@ -1560,21 +1602,10 @@ describe('ReactRelayQueryRenderer', () => {
   });
 
   describe('multiple payloads', () => {
-    let NextQuery;
     let renderer;
     let nextProps;
 
     beforeEach(() => {
-      ({NextQuery} = generateAndCompile(`
-        query NextQuery($id: ID!) {
-          node(id: $id) {
-            ... on User {
-              name
-            }
-          }
-        }
-      `));
-
       renderer = ReactTestRenderer.create(
         <PropsSetter>
           <ReactRelayQueryRenderer

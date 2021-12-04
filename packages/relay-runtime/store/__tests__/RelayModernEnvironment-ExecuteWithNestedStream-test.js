@@ -9,20 +9,33 @@
  * @emails oncall+relay
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const RelayModernEnvironment = require('../RelayModernEnvironment');
-const RelayModernStore = require('../RelayModernStore');
+'use strict';
+import type {
+  Variables,
+  CacheConfig,
+} from 'relay-runtime/util/RelayRuntimeTypes';
+import type {RequestParameters} from 'relay-runtime/util/RelayConcreteNode';
+import type {
+  RecordSourceProxy,
+  HandleFieldPayload,
+} from 'relay-runtime/store/RelayStoreTypes';
+
 const RelayNetwork = require('../../network/RelayNetwork');
 const RelayObservable = require('../../network/RelayObservable');
-const RelayRecordSource = require('../RelayRecordSource');
-
+const {getFragment, getRequest, graphql} = require('../../query/GraphQLTag');
+const RelayModernEnvironment = require('../RelayModernEnvironment');
 const {
   createOperationDescriptor,
 } = require('../RelayModernOperationDescriptor');
 const {createReaderSelector} = require('../RelayModernSelector');
+const RelayModernStore = require('../RelayModernStore');
+const RelayRecordSource = require('../RelayRecordSource');
 const {VIEWER_ID} = require('../ViewerPattern');
-const {generateAndCompile} = require('relay-test-utils-internal');
+const {disallowWarnings} = require('relay-test-utils-internal');
+
+disallowWarnings();
 
 describe('execute() a query with nested @stream', () => {
   let actorFragment;
@@ -43,54 +56,46 @@ describe('execute() a query with nested @stream', () => {
   let variables;
 
   beforeEach(() => {
-    jest.resetModules();
-    jest.mock('warning');
-    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-    ({
-      FeedQuery: query,
-      FeedFragment: feedFragment,
-      ActorFragment: actorFragment,
-    } = generateAndCompile(`
-        query FeedQuery($enableStream: Boolean!) {
-          viewer {
-            ...FeedFragment
-          }
+    query = getRequest(graphql`
+      query RelayModernEnvironmentExecuteWithNestedStreamTestFeedQuery(
+        $enableStream: Boolean!
+      ) {
+        viewer {
+          ...RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment
         }
+      }
+    `);
 
-        fragment FeedFragment on Viewer {
-          newsFeed(first: 10) {
-            edges  @stream(label: "newsFeed", if: $enableStream, initial_count: 0) {
-              cursor
-              node {
-                id
-                feedback {
-                  actors @stream(label: "actors", if: $enableStream, initial_count: 0) {
-                    name @__clientField(handle: "name_handler")
-                  }
+    feedFragment = getFragment(graphql`
+      fragment RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment on Viewer {
+        newsFeed(first: 10) {
+          edges
+            @stream(label: "newsFeed", if: $enableStream, initial_count: 0) {
+            cursor
+            node {
+              id
+              feedback {
+                actors
+                  @stream(
+                    label: "actors"
+                    if: $enableStream
+                    initial_count: 0
+                  ) {
+                  name @__clientField(handle: "name_handler")
                 }
               }
             }
           }
         }
+      }
+    `);
 
-        fragment FeedEdgeFragment on NewsFeedEdge {
-          cursor
-          node {
-            id
-            feedback {
-              actors @stream(label: "actors", if: $enableStream, initial_count: 0) {
-                name @__clientField(handle: "name_handler")
-              }
-            }
-          }
-        }
-
+    actorFragment = getFragment(graphql`
+      fragment RelayModernEnvironmentExecuteWithNestedStreamTestActorFragment on User {
         # keep in sync with above
-        fragment ActorFragment on Actor {
-          name @__clientField(handle: "name_handler")
-        }
-      `));
+        name @__clientField(handle: "name_handler")
+      }
+    `);
     variables = {enableStream: true};
     operation = createOperationDescriptor(query, variables);
     selector = createReaderSelector(
@@ -101,7 +106,7 @@ describe('execute() a query with nested @stream', () => {
     );
 
     const NameHandler = {
-      update(storeProxy, payload) {
+      update(storeProxy: RecordSourceProxy, payload: HandleFieldPayload) {
         const record = storeProxy.get(payload.dataID);
         if (record != null) {
           const markup = record.getValue(payload.fieldKey);
@@ -117,7 +122,11 @@ describe('execute() a query with nested @stream', () => {
     error = jest.fn();
     next = jest.fn();
     callbacks = {complete, error, next};
-    fetch = (_query, _variables, _cacheConfig) => {
+    fetch = (
+      _query: RequestParameters,
+      _variables: Variables,
+      _cacheConfig: CacheConfig,
+    ) => {
       return RelayObservable.create(sink => {
         dataSource = sink;
       });
@@ -166,7 +175,8 @@ describe('execute() a query with nested @stream', () => {
           },
         },
       },
-      label: 'FeedFragment$stream$newsFeed',
+      label:
+        'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$newsFeed',
       path: ['viewer', 'newsFeed', 'edges', 0],
     });
     expect(error.mock.calls.map(call => call[0].stack)).toEqual([]);
@@ -202,7 +212,8 @@ describe('execute() a query with nested @stream', () => {
         id: 'user-1',
         name: 'Alice',
       },
-      label: 'FeedFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$actors',
       path: ['viewer', 'newsFeed', 'edges', 0, 'node', 'feedback', 'actors', 0],
     });
     expect(error.mock.calls.map(call => call[0].stack)).toEqual([]);
@@ -236,7 +247,8 @@ describe('execute() a query with nested @stream', () => {
         id: 'user-2',
         name: 'Bob',
       },
-      label: 'FeedFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$actors',
       path: ['viewer', 'newsFeed', 'edges', 0, 'node', 'feedback', 'actors', 1],
     });
     expect(error.mock.calls.map(call => call[0].stack)).toEqual([]);
@@ -296,7 +308,8 @@ describe('execute() a query with nested @stream', () => {
         id: 'user-1',
         name: 'Alice',
       },
-      label: 'FeedFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$actors',
       path: ['viewer', 'newsFeed', 'edges', 0, 'node', 'feedback', 'actors', 0],
     });
     expect(next).toBeCalledTimes(1);
@@ -348,7 +361,8 @@ describe('execute() a query with nested @stream', () => {
         id: 'user-1',
         name: 'Alice',
       },
-      label: 'FeedFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$actors',
       path: ['viewer', 'newsFeed', 'edges', 0, 'node', 'feedback', 'actors', 0],
     });
     expect(next).toBeCalledTimes(1);
@@ -405,7 +419,8 @@ describe('execute() a query with nested @stream', () => {
           id: 'user-1',
           name: 'Alice',
         },
-        label: 'FeedFragment$stream$actors',
+        label:
+          'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$actors',
         path: [
           'viewer',
           'newsFeed',
@@ -472,7 +487,8 @@ describe('execute() a query with nested @stream', () => {
           id: 'user-2',
           name: 'Bob',
         },
-        label: 'FeedFragment$stream$actors',
+        label:
+          'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$actors',
         path: [
           'viewer',
           'newsFeed',
@@ -510,7 +526,8 @@ describe('execute() a query with nested @stream', () => {
         id: 'user-2',
         name: 'Bob',
       },
-      label: 'FeedFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$actors',
       path: ['viewer', 'newsFeed', 'edges', 0, 'node', 'feedback', 'actors', 1],
     });
     dataSource.next({
@@ -519,7 +536,8 @@ describe('execute() a query with nested @stream', () => {
         id: 'user-1',
         name: 'Alice',
       },
-      label: 'FeedFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$actors',
       path: ['viewer', 'newsFeed', 'edges', 0, 'node', 'feedback', 'actors', 0],
     });
     expect(error.mock.calls.map(call => call[0].stack)).toEqual([]);
@@ -565,7 +583,8 @@ describe('execute() a query with nested @stream', () => {
           },
         },
       },
-      label: 'FeedFragment$stream$newsFeed',
+      label:
+        'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$newsFeed',
       path: ['viewer', 'newsFeed', 'edges', 0],
     });
     next.mockClear();
@@ -577,7 +596,8 @@ describe('execute() a query with nested @stream', () => {
         id: 'user-1',
         name: 'Alice',
       },
-      label: 'FeedFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$actors',
       path: ['viewer', 'newsFeed', 'edges', 0, 'node', 'feedback', 'actors', 0],
     });
 
@@ -626,7 +646,8 @@ describe('execute() a query with nested @stream', () => {
           severity: 'ERROR',
         },
       ],
-      label: 'FeedFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithNestedStreamTestFeedFragment$stream$actors',
       path: [
         '<unknown-path>',
         'viewer',
@@ -643,7 +664,7 @@ describe('execute() a query with nested @stream', () => {
     expect(complete).toBeCalledTimes(0);
     expect(error).toBeCalledTimes(1);
     expect(error.mock.calls[0][0].message).toContain(
-      'No data returned for operation `FeedQuery`',
+      'No data returned for operation `RelayModernEnvironmentExecuteWithNestedStreamTestFeedQuery`',
     );
     expect(next).toBeCalledTimes(0);
     expect(callback).toBeCalledTimes(0);

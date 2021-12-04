@@ -8,27 +8,54 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
 import type {
-  NormalizationSelection,
   NormalizationField,
+  NormalizationSelection,
 } from '../util/NormalizationNode';
 import type {ConcreteRequest} from '../util/RelayConcreteNode';
 import type {Variables} from '../util/RelayRuntimeTypes';
 
-type ValidationContext = {
+const {
+  ACTOR_CHANGE,
+  CLIENT_COMPONENT,
+  CLIENT_EXTENSION,
+  CONDITION,
+  DEFER,
+  FLIGHT_FIELD,
+  FRAGMENT_SPREAD,
+  INLINE_FRAGMENT,
+  LINKED_FIELD,
+  LINKED_HANDLE,
+  MODULE_IMPORT,
+  SCALAR_FIELD,
+  SCALAR_HANDLE,
+  STREAM,
+  TYPE_DISCRIMINATOR,
+} = require('../util/RelayConcreteNode');
+const warning = require('warning');
+
+type ValidationContext = {|
   visitedPaths: Set<string>,
   path: string,
   variables: Variables,
   missingDiff: Object,
   extraDiff: Object,
-};
-const warning = require('warning');
+  moduleImportPaths: Set<string>,
+|};
+// $FlowFixMe[method-unbinding] added when improving typing for this parameters
+const hasOwnProperty = Object.prototype.hasOwnProperty;
 
 let validateMutation = () => {};
 if (__DEV__) {
-  const addFieldToDiff = (path: string, diff: Object, isScalar) => {
+  const addFieldToDiff = (
+    path: string,
+    diff: Object,
+    isScalar: void | boolean,
+  ) => {
     let deepLoc = diff;
     path.split('.').forEach((key, index, arr) => {
       if (deepLoc[key] == null) {
@@ -52,6 +79,7 @@ if (__DEV__) {
       variables: variables || {},
       missingDiff: {},
       extraDiff: {},
+      moduleImportPaths: new Set(),
     };
     validateSelections(
       optimisticResponse,
@@ -89,34 +117,49 @@ if (__DEV__) {
     context: ValidationContext,
   ) => {
     switch (selection.kind) {
-      case 'Condition':
+      case CONDITION:
         validateSelections(optimisticResponse, selection.selections, context);
         return;
-      case 'ScalarField':
-      case 'LinkedField':
+      case CLIENT_COMPONENT:
+      case FRAGMENT_SPREAD:
+        validateSelections(
+          optimisticResponse,
+          selection.fragment.selections,
+          context,
+        );
+        return;
+      case SCALAR_FIELD:
+      case LINKED_FIELD:
+      case FLIGHT_FIELD:
         return validateField(optimisticResponse, selection, context);
-      case 'InlineFragment':
+      case ACTOR_CHANGE:
+        return validateField(
+          optimisticResponse,
+          selection.linkedField,
+          context,
+        );
+      case INLINE_FRAGMENT:
         const type = selection.type;
+        const isConcreteType = selection.abstractKey == null;
         selection.selections.forEach(subselection => {
-          if (optimisticResponse.__typename !== type) {
+          if (isConcreteType && optimisticResponse.__typename !== type) {
             return;
           }
           validateSelection(optimisticResponse, subselection, context);
         });
         return;
-      case 'Connection':
-        validateSelections(
-          optimisticResponse,
-          [selection.edges, selection.pageInfo],
-          context,
-        );
-        break;
-      case 'ClientExtension':
-      case 'ModuleImport':
-      case 'LinkedHandle':
-      case 'ScalarHandle':
-      case 'Defer':
-      case 'Stream': {
+      case CLIENT_EXTENSION:
+        selection.selections.forEach(subselection => {
+          validateSelection(optimisticResponse, subselection, context);
+        });
+        return;
+      case MODULE_IMPORT:
+        return validateModuleImport(context);
+      case LINKED_HANDLE:
+      case SCALAR_HANDLE:
+      case DEFER:
+      case STREAM:
+      case TYPE_DISCRIMINATOR: {
         // TODO(T35864292) - Add missing validations for these types
         return;
       }
@@ -124,6 +167,10 @@ if (__DEV__) {
         (selection: empty);
         return;
     }
+  };
+
+  const validateModuleImport = (context: ValidationContext) => {
+    context.moduleImportPaths.add(context.path);
   };
 
   const validateField = (
@@ -135,28 +182,30 @@ if (__DEV__) {
     const path = `${context.path}.${fieldName}`;
     context.visitedPaths.add(path);
     switch (field.kind) {
-      case 'ScalarField':
-        if (optimisticResponse.hasOwnProperty(fieldName) === false) {
+      case SCALAR_FIELD:
+        if (hasOwnProperty.call(optimisticResponse, fieldName) === false) {
           addFieldToDiff(path, context.missingDiff, true);
         }
         return;
-      case 'LinkedField':
+      case LINKED_FIELD:
         const selections = field.selections;
         if (
           optimisticResponse[fieldName] === null ||
-          (Object.hasOwnProperty(fieldName) &&
+          (hasOwnProperty.call(optimisticResponse, fieldName) &&
             optimisticResponse[fieldName] === undefined)
         ) {
           return;
         }
         if (field.plural) {
           if (Array.isArray(optimisticResponse[fieldName])) {
-            optimisticResponse[fieldName].forEach(r =>
-              validateSelections(r, selections, {
-                ...context,
-                path,
-              }),
-            );
+            optimisticResponse[fieldName].forEach(r => {
+              if (r !== null) {
+                validateSelections(r, selections, {
+                  ...context,
+                  path,
+                });
+              }
+            });
             return;
           } else {
             addFieldToDiff(path, context.missingDiff);
@@ -174,6 +223,21 @@ if (__DEV__) {
             return;
           }
         }
+      case FLIGHT_FIELD:
+        if (
+          optimisticResponse[fieldName] === null ||
+          (hasOwnProperty.call(optimisticResponse, fieldName) &&
+            optimisticResponse[fieldName] === undefined)
+        ) {
+          return;
+        }
+        throw new Error(
+          'validateMutation: Flight fields are not compatible with ' +
+            'optimistic updates, as React does not have the component code ' +
+            'necessary to process new data on the client. Instead, you ' +
+            'should update your code to require a full refetch of the Flight ' +
+            'field so your UI can be updated.',
+        );
     }
   };
 
@@ -182,12 +246,20 @@ if (__DEV__) {
     context: ValidationContext,
   ) => {
     if (Array.isArray(optimisticResponse)) {
-      optimisticResponse.forEach(r => validateOptimisticResponse(r, context));
+      optimisticResponse.forEach(r => {
+        if (r instanceof Object) {
+          validateOptimisticResponse(r, context);
+        }
+      });
       return;
     }
     Object.keys(optimisticResponse).forEach((key: string) => {
       const value = optimisticResponse[key];
       const path = `${context.path}.${key}`;
+      // if it's a module import path we don't have an ast so we cannot validate it
+      if (context.moduleImportPaths.has(path)) {
+        return;
+      }
       if (!context.visitedPaths.has(path)) {
         addFieldToDiff(path, context.extraDiff);
         return;

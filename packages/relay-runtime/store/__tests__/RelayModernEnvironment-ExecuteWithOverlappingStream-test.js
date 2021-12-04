@@ -9,14 +9,23 @@
  * @emails oncall+relay
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const RelayModernEnvironment = require('../RelayModernEnvironment');
-const RelayModernStore = require('../RelayModernStore');
+'use strict';
+import type {
+  Variables,
+  CacheConfig,
+} from 'relay-runtime/util/RelayRuntimeTypes';
+import type {RequestParameters} from 'relay-runtime/util/RelayConcreteNode';
+import type {
+  RecordSourceProxy,
+  HandleFieldPayload,
+} from 'relay-runtime/store/RelayStoreTypes';
+
 const RelayNetwork = require('../../network/RelayNetwork');
 const RelayObservable = require('../../network/RelayObservable');
-const RelayRecordSource = require('../RelayRecordSource');
-
+const {getFragment, getRequest, graphql} = require('../../query/GraphQLTag');
+const RelayModernEnvironment = require('../RelayModernEnvironment');
 const {
   createOperationDescriptor,
 } = require('../RelayModernOperationDescriptor');
@@ -24,9 +33,12 @@ const {
   createReaderSelector,
   getSingularSelector,
 } = require('../RelayModernSelector');
-const {generateAndCompile} = require('relay-test-utils-internal');
+const RelayModernStore = require('../RelayModernStore');
+const RelayRecordSource = require('../RelayRecordSource');
+const nullthrows = require('nullthrows');
+const {disallowWarnings} = require('relay-test-utils-internal');
 
-import nullthrows from 'nullthrows';
+disallowWarnings();
 
 describe('execute() a query with multiple @stream selections on the same record', () => {
   let callbacks;
@@ -46,46 +58,44 @@ describe('execute() a query with multiple @stream selections on the same record'
   let deferFragment;
 
   beforeEach(() => {
-    jest.resetModules();
-    jest.mock('warning');
-    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-    ({
-      FeedbackQuery: query,
-      FeedbackFragment: fragment,
-      DeferFragment: deferFragment,
-    } = generateAndCompile(`
-        query FeedbackQuery($id: ID!, $enableStream: Boolean!) {
-          node(id: $id) {
-            ...FeedbackFragment
-          }
+    query = getRequest(graphql`
+      query RelayModernEnvironmentExecuteWithOverlappingStreamTestFeedbackQuery(
+        $id: ID!
+        $enableStream: Boolean!
+      ) {
+        node(id: $id) {
+          ...RelayModernEnvironmentExecuteWithOverlappingStreamTestFeedbackFragment
         }
-
-        fragment FeedbackFragment on Feedback {
-          id
-          actors
+      }
+    `);
+    fragment = getFragment(graphql`
+      fragment RelayModernEnvironmentExecuteWithOverlappingStreamTestFeedbackFragment on Feedback {
+        id
+        actors
           @stream(label: "actors", if: $enableStream, initial_count: 0)
           @__clientField(handle: "actors_handler") {
-            name @__clientField(handle: "name_handler")
-          }
-          ... DeferFragment @defer(label: "viewedBy", if: $enableStream)
+          name @__clientField(handle: "name_handler")
         }
-
-        fragment DeferFragment on Feedback {
-          viewedBy
+        ...RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment
+          @defer(label: "viewedBy", if: $enableStream)
+      }
+    `);
+    deferFragment = getFragment(graphql`
+      fragment RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment on Feedback {
+        viewedBy
           @stream(label: "viewedBy", if: $enableStream, initial_count: 0)
           @__clientField(handle: "actors_handler") {
-            name @__clientField(handle: "name_handler")
-          }
+          name @__clientField(handle: "name_handler")
         }
-      `));
+      }
+    `);
     variables = {id: '1', enableStream: true};
     operation = createOperationDescriptor(query, variables);
     selector = createReaderSelector(fragment, '1', {}, operation.request);
     // Handler to upper-case the value of the (string) field to which it's
     // applied
     const NameHandler = {
-      update(storeProxy, payload) {
+      update(storeProxy: RecordSourceProxy, payload: HandleFieldPayload) {
         const record = storeProxy.get(payload.dataID);
         if (record != null) {
           const name = record.getValue(payload.fieldKey);
@@ -100,7 +110,7 @@ describe('execute() a query with multiple @stream selections on the same record'
     // synthesized client field: this is just to check whether the handler
     // ran or not.
     const ActorsHandler = {
-      update(storeProxy, payload) {
+      update(storeProxy: RecordSourceProxy, payload: HandleFieldPayload) {
         const record = storeProxy.get(payload.dataID);
         if (record != null) {
           const actors = record.getLinkedRecords(payload.fieldKey);
@@ -117,7 +127,11 @@ describe('execute() a query with multiple @stream selections on the same record'
     error = jest.fn();
     next = jest.fn();
     callbacks = {complete, error, next};
-    fetch = (_query, _variables, _cacheConfig) => {
+    fetch = (
+      _query: RequestParameters,
+      _variables: Variables,
+      _cacheConfig: CacheConfig,
+    ) => {
       return RelayObservable.create(sink => {
         dataSource = sink;
       });
@@ -166,9 +180,10 @@ describe('execute() a query with multiple @stream selections on the same record'
       id: '1',
       actors: [],
       __fragments: {
-        DeferFragment: {},
+        RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment: {},
       },
       __fragmentOwner: operation.request,
+      __isWithinUnmatchedTypeRefinement: false,
       __id: '1',
     });
     const deferSelector = nullthrows(
@@ -214,7 +229,8 @@ describe('execute() a query with multiple @stream selections on the same record'
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithOverlappingStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
     expect(next).toBeCalledTimes(1);
@@ -226,9 +242,10 @@ describe('execute() a query with multiple @stream selections on the same record'
       id: '1',
       actors: [{name: 'ALICE'}],
       __fragments: {
-        DeferFragment: {},
+        RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment: {},
       },
       __fragmentOwner: operation.request,
+      __isWithinUnmatchedTypeRefinement: false,
       __id: '1',
     });
 
@@ -238,7 +255,8 @@ describe('execute() a query with multiple @stream selections on the same record'
         id: '3',
         name: 'Bob',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithOverlappingStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 1],
     });
     expect(next).toBeCalledTimes(2);
@@ -250,9 +268,10 @@ describe('execute() a query with multiple @stream selections on the same record'
       id: '1',
       actors: [{name: 'ALICE'}, {name: 'BOB'}],
       __fragments: {
-        DeferFragment: {},
+        RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment: {},
       },
       __fragmentOwner: operation.request,
+      __isWithinUnmatchedTypeRefinement: false,
       __id: '1',
     });
 
@@ -260,7 +279,8 @@ describe('execute() a query with multiple @stream selections on the same record'
       data: {
         viewedBy: [],
       },
-      label: 'FeedbackFragment$defer$viewedBy',
+      label:
+        'RelayModernEnvironmentExecuteWithOverlappingStreamTestFeedbackFragment$defer$viewedBy',
       path: ['node'],
     });
     expect(next).toBeCalledTimes(3);
@@ -278,7 +298,8 @@ describe('execute() a query with multiple @stream selections on the same record'
         id: '4',
         name: 'Claire',
       },
-      label: 'DeferFragment$stream$viewedBy',
+      label:
+        'RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment$stream$viewedBy',
       path: ['node', 'viewedBy', 0],
     });
     expect(next).toBeCalledTimes(4);
@@ -296,7 +317,8 @@ describe('execute() a query with multiple @stream selections on the same record'
         id: '5',
         name: 'Dave',
       },
-      label: 'DeferFragment$stream$viewedBy',
+      label:
+        'RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment$stream$viewedBy',
       path: ['node', 'viewedBy', 1],
     });
     expect(next).toBeCalledTimes(5);
@@ -344,7 +366,8 @@ describe('execute() a query with multiple @stream selections on the same record'
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithOverlappingStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
     expect(error.mock.calls.map(call => call[0].stack)).toEqual([]);
@@ -357,9 +380,10 @@ describe('execute() a query with multiple @stream selections on the same record'
       id: '1',
       actors: [{name: 'ALICE'}],
       __fragments: {
-        DeferFragment: {},
+        RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment: {},
       },
       __fragmentOwner: operation.request,
+      __isWithinUnmatchedTypeRefinement: false,
       __id: '1',
     });
 
@@ -367,7 +391,8 @@ describe('execute() a query with multiple @stream selections on the same record'
       data: {
         viewedBy: [],
       },
-      label: 'FeedbackFragment$defer$viewedBy',
+      label:
+        'RelayModernEnvironmentExecuteWithOverlappingStreamTestFeedbackFragment$defer$viewedBy',
       path: ['node'],
     });
     expect(error.mock.calls.map(call => call[0].stack)).toEqual([]);
@@ -386,7 +411,8 @@ describe('execute() a query with multiple @stream selections on the same record'
         id: '4',
         name: 'Claire',
       },
-      label: 'DeferFragment$stream$viewedBy',
+      label:
+        'RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment$stream$viewedBy',
       path: ['node', 'viewedBy', 0],
     });
     expect(error.mock.calls.map(call => call[0].stack)).toEqual([]);
@@ -405,7 +431,8 @@ describe('execute() a query with multiple @stream selections on the same record'
         id: '3',
         name: 'Bob',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithOverlappingStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 1],
     });
     expect(error.mock.calls.map(call => call[0].stack)).toEqual([]);
@@ -418,9 +445,10 @@ describe('execute() a query with multiple @stream selections on the same record'
       id: '1',
       actors: [{name: 'ALICE'}, {name: 'BOB'}],
       __fragments: {
-        DeferFragment: {},
+        RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment: {},
       },
       __fragmentOwner: operation.request,
+      __isWithinUnmatchedTypeRefinement: false,
       __id: '1',
     });
 
@@ -430,7 +458,8 @@ describe('execute() a query with multiple @stream selections on the same record'
         id: '5',
         name: 'Dave',
       },
-      label: 'DeferFragment$stream$viewedBy',
+      label:
+        'RelayModernEnvironmentExecuteWithOverlappingStreamTestDeferFragment$stream$viewedBy',
       path: ['node', 'viewedBy', 1],
     });
     expect(next).toBeCalledTimes(5);

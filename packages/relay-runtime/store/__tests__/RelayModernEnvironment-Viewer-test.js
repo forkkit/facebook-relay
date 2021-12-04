@@ -9,22 +9,30 @@
  * @emails oncall+relay
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const RelayModernEnvironment = require('../RelayModernEnvironment');
-const RelayModernStore = require('../RelayModernStore');
-const RelayNetwork = require('../../network/RelayNetwork');
-const RelayObservable = require('../../network/RelayObservable');
-const RelayRecordSource = require('../RelayRecordSource');
+'use strict';
+import type {
+  Variables,
+  CacheConfig,
+} from 'relay-runtime/util/RelayRuntimeTypes';
+import type {RequestParameters} from 'relay-runtime/util/RelayConcreteNode';
 
 const commitMutation = require('../../mutations/commitMutation');
-
+const RelayNetwork = require('../../network/RelayNetwork');
+const RelayObservable = require('../../network/RelayObservable');
+const RelayModernEnvironment = require('../RelayModernEnvironment');
 const {
   createOperationDescriptor,
 } = require('../RelayModernOperationDescriptor');
 const {createReaderSelector} = require('../RelayModernSelector');
+const RelayModernStore = require('../RelayModernStore');
+const RelayRecordSource = require('../RelayRecordSource');
 const {ROOT_ID} = require('../RelayStoreUtils');
-const {generateAndCompile} = require('relay-test-utils-internal');
+const {getRequest, graphql} = require('relay-runtime');
+const {disallowWarnings} = require('relay-test-utils-internal');
+
+disallowWarnings();
 
 describe('Mutations on viewer', () => {
   let dataSource;
@@ -37,20 +45,22 @@ describe('Mutations on viewer', () => {
   let store;
 
   beforeEach(() => {
-    ({SetLocation: mutation} = generateAndCompile(`
-        mutation SetLocation($input: LocationInput!) {
-          setLocation(input: $input) {
-            viewer {
-              marketplace_settings {
-                location {
-                  latitude
-                  longitude
-                }
+    mutation = graphql`
+      mutation RelayModernEnvironmentViewerTest_SetLocationMutation(
+        $input: LocationInput!
+      ) {
+        setLocation(input: $input) {
+          viewer {
+            marketplace_settings {
+              location {
+                latitude
+                longitude
               }
             }
           }
         }
-      `));
+      }
+    `;
     variables = {
       input: {
         longitude: 30.0,
@@ -60,7 +70,11 @@ describe('Mutations on viewer', () => {
 
     onCompleted = jest.fn();
     onError = jest.fn();
-    const fetch = (_query, _variables, _cacheConfig) => {
+    const fetch = (
+      _query: RequestParameters,
+      _variables: Variables,
+      _cacheConfig: CacheConfig,
+    ) => {
       return RelayObservable.create(sink => {
         dataSource = sink;
       });
@@ -74,14 +88,15 @@ describe('Mutations on viewer', () => {
   });
 
   it("doesn't overwrite existing data in a mutation under viewer field", () => {
-    const {ShortCutQuery} = generateAndCompile(`
-      query ShortCutQuery {
+    const query = graphql`
+      query RelayModernEnvironmentViewerTestQuery {
         viewer {
           marketplace_settings {
             categories
           }
         }
-      }`);
+      }
+    `;
     const payload = {
       viewer: {
         marketplace_settings: {
@@ -89,7 +104,7 @@ describe('Mutations on viewer', () => {
         },
       },
     };
-
+    const ShortCutQuery = getRequest(query);
     const operationDescriptor = createOperationDescriptor(ShortCutQuery, {});
     const selector = createReaderSelector(
       ShortCutQuery.fragment,
@@ -130,66 +145,5 @@ describe('Mutations on viewer', () => {
       },
     });
     expect(callback).toBeCalledTimes(0); // no changes to selector result
-  });
-
-  it('stores data onto viewer field when no viewer field exists in the store, and it can be queried, ', () => {
-    const {LocationQuery} = generateAndCompile(`
-      query LocationQuery {
-        viewer {
-          marketplace_settings {
-            location {
-              latitude
-              longitude
-            }
-          }
-        }
-      }`);
-
-    const operationDescriptor = createOperationDescriptor(LocationQuery, {});
-    const selector = createReaderSelector(
-      LocationQuery.fragment,
-      ROOT_ID,
-      {},
-      operationDescriptor.request,
-    );
-    const snapshot = environment.lookup(selector);
-    const callback = jest.fn();
-    environment.subscribe(snapshot, callback);
-
-    commitMutation(environment, {
-      mutation,
-      variables,
-      onCompleted,
-      onError,
-    });
-    dataSource.next({
-      data: {
-        setLocation: {
-          viewer: {
-            marketplace_settings: {
-              location: {
-                latitude: 30.0,
-                longitude: 30.0,
-              },
-            },
-          },
-        },
-      },
-    });
-    environment.check(operationDescriptor.root); // fill in missing viewer
-    expect(callback).toBeCalledTimes(2);
-    expect(callback.mock.calls[0][0].data).toEqual({
-      viewer: undefined,
-    });
-    expect(callback.mock.calls[1][0].data).toEqual({
-      viewer: {
-        marketplace_settings: {
-          location: {
-            latitude: 30,
-            longitude: 30,
-          },
-        },
-      },
-    });
   });
 });

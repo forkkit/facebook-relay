@@ -9,22 +9,40 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const invariant = require('invariant');
+import type {
+  GraphQLSingularResponse,
+  NormalizationArgument,
+  NormalizationField,
+  NormalizationLinkedField,
+  NormalizationOperation,
+  NormalizationScalarField,
+  NormalizationSelection,
+  NormalizationSplitOperation,
+  OperationDescriptor,
+  Variables,
+} from 'relay-runtime';
 
+const invariant = require('invariant');
 const {
-  TYPENAME_KEY,
   RelayConcreteNode,
+  TYPENAME_KEY,
   getModuleComponentKey,
   getModuleOperationKey,
 } = require('relay-runtime');
 
 const {
+  ACTOR_CHANGE,
+  CLIENT_COMPONENT,
   CLIENT_EXTENSION,
   CONDITION,
   CONNECTION,
   DEFER,
+  FLIGHT_FIELD,
+  FRAGMENT_SPREAD,
   INLINE_FRAGMENT,
   LINKED_FIELD,
   LINKED_HANDLE,
@@ -32,19 +50,8 @@ const {
   SCALAR_FIELD,
   SCALAR_HANDLE,
   STREAM,
+  TYPE_DISCRIMINATOR,
 } = RelayConcreteNode;
-
-import type {
-  Variables,
-  NormalizationField,
-  NormalizationOperation,
-  NormalizationSelection,
-  NormalizationLinkedField,
-  NormalizationScalarField,
-  OperationDescriptor,
-  GraphQLResponse,
-  NormalizationSplitOperation,
-} from 'relay-runtime';
 
 type ValueResolver = (
   typeName: ?string,
@@ -58,21 +65,21 @@ type Traversable = {|
   +isAbstractType: ?boolean,
   +name: ?string,
   +alias: ?string,
-  +args: ?{[string]: mixed},
+  +args: ?{[string]: mixed, ...},
 |};
-type MockData = {[string]: mixed};
+type MockData = {[string]: mixed, ...};
 type MockResolverContext = {|
   +parentType: ?string,
   +name: ?string,
   +alias: ?string,
   +path: ?$ReadOnlyArray<string>,
-  +args: ?{[string]: mixed},
+  +args: ?{[string]: mixed, ...},
 |};
 type MockResolver = (
   context: MockResolverContext,
   generateId: () => number,
 ) => mixed;
-export type MockResolvers = {[typeName: string]: MockResolver};
+export type MockResolvers = {[typeName: string]: MockResolver, ...};
 
 type SelectionMetadata = {
   [selectionPath: string]: {|
@@ -81,6 +88,7 @@ type SelectionMetadata = {
     +nullable: boolean,
     +enumValues: $ReadOnlyArray<string> | null,
   |},
+  ...
 };
 
 function createIdGenerator() {
@@ -136,9 +144,9 @@ function valueResolver(
         possibleDefaultValue ??
         (typeName === 'ID'
           ? DEFAULT_MOCK_RESOLVERS.ID(context, generateId)
-          : `<mock-value-for-field-"${context.alias ??
-              context.name ??
-              'undefined'}">`);
+          : `<mock-value-for-field-"${
+              context.alias ?? context.name ?? 'undefined'
+            }">`);
     }
     return mockValue;
   };
@@ -179,11 +187,14 @@ class RelayMockPayloadGenerator {
     +selectionMetadata: SelectionMetadata | null,
   |}) {
     this._variables = options.variables;
+    // $FlowFixMe[cannot-spread-inexact]
+    // $FlowFixMe[incompatible-type]
     this._mockResolvers = {
       ...DEFAULT_MOCK_RESOLVERS,
       ...(options.mockResolvers ?? {}),
     };
     this._selectionMetadata = options.selectionMetadata ?? {};
+    // $FlowFixMe[incompatible-call]
     this._resolveValue = createValueResolver(this._mockResolvers);
   }
 
@@ -256,6 +267,7 @@ class RelayMockPayloadGenerator {
           );
           break;
         }
+        // $FlowFixMe[incompatible-type]
         case CONNECTION: {
           mockData = this._traverseSelections(
             [selection.edges, selection.pageInfo],
@@ -285,7 +297,6 @@ class RelayMockPayloadGenerator {
           }
           break;
 
-        case CLIENT_EXTENSION:
         case DEFER:
         case STREAM: {
           mockData = this._traverseSelections(
@@ -299,7 +310,36 @@ class RelayMockPayloadGenerator {
           break;
         }
 
+        case CLIENT_COMPONENT:
+        case FRAGMENT_SPREAD: {
+          mockData = this._traverseSelections(
+            selection.fragment.selections,
+            typeName,
+            isAbstractType,
+            path,
+            mockData,
+            defaultValues,
+          );
+          break;
+        }
+
         case INLINE_FRAGMENT: {
+          const {abstractKey} = selection;
+          if (abstractKey != null) {
+            if (mockData != null) {
+              mockData[abstractKey] = true;
+            }
+            mockData = this._traverseSelections(
+              selection.selections,
+              typeName,
+              isAbstractType,
+              path,
+              mockData,
+              defaultValues,
+            );
+            break;
+          }
+
           // If it's the first time we're trying to handle fragment spread
           // on this selection, we will generate data for this type.
           // Next fragment spread on this selection will be added only if the
@@ -418,18 +458,19 @@ class RelayMockPayloadGenerator {
               selection.fragmentName,
             );
 
-            const splitOperation: NormalizationSplitOperation = (operation: $FlowFixMe);
+            const splitOperation: NormalizationSplitOperation =
+              (operation: $FlowFixMe);
             const {documentName} = selection;
             if (mockData == null) {
               mockData = {};
             }
+            // $FlowFixMe[cannot-spread-indexer]
             mockData = {
               ...mockData,
               [TYPENAME_KEY]: typeName,
               [getModuleOperationKey(documentName)]: operation.name,
-              [getModuleComponentKey(
-                documentName,
-              )]: defaultValues.__module_component,
+              [getModuleComponentKey(documentName)]:
+                defaultValues.__module_component,
               ...this._traverseSelections(
                 splitOperation.selections,
                 typeName,
@@ -441,9 +482,23 @@ class RelayMockPayloadGenerator {
             };
           }
           break;
+        case CLIENT_EXTENSION:
+          // We do not expect to receive data for the client extensions
+          // from the server. MockPayloadGenerator should not generate it too.
+          break;
+        case TYPE_DISCRIMINATOR:
+          const {abstractKey} = selection;
+          if (mockData != null) {
+            mockData[abstractKey] = true;
+          }
+          break;
         case SCALAR_HANDLE:
         case LINKED_HANDLE:
           break;
+        case FLIGHT_FIELD:
+          throw new Error('Flight fields are not yet supported.');
+        case ACTOR_CHANGE:
+          throw new Error('ActorChange fields are not yet supported.');
         default:
           (selection: empty);
           invariant(
@@ -453,6 +508,7 @@ class RelayMockPayloadGenerator {
           );
       }
     });
+    // $FlowFixMe[incompatible-return]
     return mockData;
   }
 
@@ -668,15 +724,12 @@ class RelayMockPayloadGenerator {
           args,
         },
         [...path, applicationName],
-        /* $FlowFixMe(>=0.98.0 site=react_native_fb,oss,www,mobile) This comment suppresses an
-         * error found when Flow v0.98 was deployed. To see the error delete
-         * this comment and run Flow. */
         typeof data[applicationName] === 'object'
-          ? data[applicationName]
+          ? // $FlowFixMe[incompatible-variance]
+            data[applicationName]
           : null,
-        /* $FlowFixMe(>=0.98.0 site=react_native_fb,oss,www,mobile) This comment suppresses an
-         * error found when Flow v0.98 was deployed. To see the error delete
-         * this comment and run Flow. */
+        // $FlowFixMe[incompatible-call]
+        // $FlowFixMe[incompatible-variance]
         fieldDefaultValue,
       );
     };
@@ -713,9 +766,7 @@ class RelayMockPayloadGenerator {
     fieldName: ?string,
     fieldAlias: ?string,
     path: $ReadOnlyArray<string>,
-    args: ?{
-      [string]: mixed,
-    },
+    args: ?{[string]: mixed, ...},
   ): ?MockData {
     let data;
     if (typeName != null && this._mockResolvers[typeName] != null) {
@@ -732,9 +783,7 @@ class RelayMockPayloadGenerator {
       );
     }
     if (typeof data === 'object') {
-      /* $FlowFixMe(>=0.98.0 site=react_native_fb,oss,www,mobile) This comment suppresses an
-       * error found when Flow v0.98 was deployed. To see the error delete this
-       * comment and run Flow. */
+      // $FlowFixMe[incompatible-variance]
       return data;
     }
   }
@@ -742,21 +791,37 @@ class RelayMockPayloadGenerator {
   /**
    * Get object with variables for field
    */
-  _getFieldArgs(
-    field: NormalizationField,
-  ): {
-    [string]: mixed,
-  } {
+  _getFieldArgs(field: NormalizationField): {[string]: mixed, ...} {
     const args = {};
     if (field.args != null) {
       field.args.forEach(arg => {
-        args[arg.name] =
-          arg.kind === 'Literal'
-            ? arg.value
-            : this._getVariableValue(arg.variableName);
+        args[arg.name] = this._getArgValue(arg);
       });
     }
     return args;
+  }
+
+  _getArgValue(arg: NormalizationArgument): mixed {
+    switch (arg.kind) {
+      case 'Literal':
+        return arg.value;
+      case 'Variable':
+        return this._getVariableValue(arg.variableName);
+      case 'ObjectValue': {
+        const value = {};
+        arg.fields.forEach(field => {
+          value[field.name] = this._getArgValue(field);
+        });
+        return value;
+      }
+      case 'ListValue': {
+        const value = [];
+        arg.items.forEach(item => {
+          value.push(item != null ? this._getArgValue(item) : null);
+        });
+        return value;
+      }
+    }
   }
 
   /**
@@ -850,7 +915,7 @@ function getSelectionMetadataFromOperation(
 function generateDataForOperation(
   operation: OperationDescriptor,
   mockResolvers: ?MockResolvers,
-): GraphQLResponse {
+): GraphQLSingularResponse {
   const data = generateData(
     operation.request.node.operation,
     operation.request.variables,

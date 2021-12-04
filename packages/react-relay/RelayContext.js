@@ -8,12 +8,14 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const invariant = require('invariant');
-const isRelayEnvironment = require('./isRelayEnvironment');
-
 import type {RelayContext} from 'relay-runtime';
+
+const isRelayEnvironment = require('./isRelayEnvironment');
+const invariant = require('invariant');
 
 /**
  * Asserts that the input is a matches the `RelayContext` type defined in

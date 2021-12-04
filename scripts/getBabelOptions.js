@@ -9,7 +9,7 @@
 
 'use strict';
 
-module.exports = function(options) {
+module.exports = function (options) {
   options = Object.assign(
     {
       env: 'production',
@@ -24,19 +24,20 @@ module.exports = function(options) {
     stripDEV: options.env === 'production',
   });
 
-  fbjsPreset.presets[0].plugins.push([
-    require('./rewrite-modules'),
-    {
-      map: {
-        ErrorUtils: 'fbjs/lib/ErrorUtils',
-        Promise: 'promise-polyfill',
-        areEqual: 'fbjs/lib/areEqual',
-        invariant: 'fbjs/lib/invariant',
-        mapObject: 'fbjs/lib/mapObject',
-        warning: 'fbjs/lib/warning',
-      },
-    },
-  ]);
+  fbjsPreset.presets.push({
+    plugins: [
+      [
+        require('./rewrite-modules'),
+        {
+          map: {
+            Promise: 'promise-polyfill',
+            areEqual: 'fbjs/lib/areEqual',
+            warning: 'fbjs/lib/warning',
+          },
+        },
+      ],
+    ],
+  });
 
   if (options.postPlugins) {
     fbjsPreset.presets.push({

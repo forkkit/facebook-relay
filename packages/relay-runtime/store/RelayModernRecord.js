@@ -8,18 +8,28 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const areEqual = require('areEqual');
-const deepFreeze = require('../util/deepFreeze');
-const invariant = require('invariant');
-const warning = require('warning');
-
-const {isClientID} = require('./ClientID');
-const {ID_KEY, REF_KEY, REFS_KEY, TYPENAME_KEY} = require('./RelayStoreUtils');
-
+import type {ActorIdentifier} from '../multi-actor-environment/ActorIdentifier';
 import type {DataID} from '../util/RelayRuntimeTypes';
 import type {Record} from './RelayStoreTypes';
+
+const deepFreeze = require('../util/deepFreeze');
+const {isClientID} = require('./ClientID');
+const {
+  ACTOR_IDENTIFIER_KEY,
+  ID_KEY,
+  INVALIDATED_AT_KEY,
+  REF_KEY,
+  REFS_KEY,
+  ROOT_ID,
+  TYPENAME_KEY,
+} = require('./RelayStoreUtils');
+const areEqual = require('areEqual');
+const invariant = require('invariant');
+const warning = require('warning');
 
 /**
  * @public
@@ -163,10 +173,14 @@ function getLinkedRecordID(record: Record, storageKey: string): ?DataID {
   invariant(
     typeof link === 'object' && link && typeof link[REF_KEY] === 'string',
     'RelayModernRecord.getLinkedRecordID(): Expected `%s.%s` to be a linked ID, ' +
-      'was `%s`.',
+      'was `%s`.%s',
     record[ID_KEY],
     storageKey,
     JSON.stringify(link),
+    typeof link === 'object' && link[REFS_KEY] !== undefined
+      ? ' It appears to be a plural linked record: did you mean to call ' +
+          'getLinkedRecords() instead of getLinkedRecord()?'
+      : '',
   );
   return link[REF_KEY];
 }
@@ -188,13 +202,36 @@ function getLinkedRecordIDs(
   invariant(
     typeof links === 'object' && Array.isArray(links[REFS_KEY]),
     'RelayModernRecord.getLinkedRecordIDs(): Expected `%s.%s` to contain an array ' +
-      'of linked IDs, got `%s`.',
+      'of linked IDs, got `%s`.%s',
     record[ID_KEY],
     storageKey,
     JSON.stringify(links),
+    typeof links === 'object' && links[REF_KEY] !== undefined
+      ? ' It appears to be a singular linked record: did you mean to call ' +
+          'getLinkedRecord() instead of getLinkedRecords()?'
+      : '',
   );
   // assume items of the array are ids
   return (links[REFS_KEY]: any);
+}
+
+/**
+ * @public
+ *
+ * Returns the epoch at which the record was invalidated, if it
+ * ever was; otherwise returns null;
+ */
+function getInvalidationEpoch(record: ?Record): ?number {
+  if (record == null) {
+    return null;
+  }
+
+  const invalidatedAt = record[INVALIDATED_AT_KEY];
+  if (typeof invalidatedAt !== 'number') {
+    // If the record has never been invalidated, it isn't stale.
+    return null;
+  }
+  return invalidatedAt;
 }
 
 /**
@@ -219,7 +256,7 @@ function update(prevRecord: Record, nextRecord: Record): Record {
     const prevType = getType(prevRecord) ?? null;
     const nextType = getType(nextRecord) ?? null;
     warning(
-      isClientID(nextID) || prevType === nextType,
+      (isClientID(nextID) && nextID !== ROOT_ID) || prevType === nextType,
       'RelayModernRecord: Invalid record update, expected both versions of ' +
         'record `%s` to have the same `%s` but got conflicting types `%s` ' +
         'and `%s`. The GraphQL server likely violated the globally unique ' +
@@ -263,7 +300,7 @@ function merge(record1: Record, record2: Record): Record {
     const prevType = getType(record1) ?? null;
     const nextType = getType(record2) ?? null;
     warning(
-      isClientID(nextID) || prevType === nextType,
+      (isClientID(nextID) && nextID !== ROOT_ID) || prevType === nextType,
       'RelayModernRecord: Invalid record merge, expected both versions of ' +
         'record `%s` to have the same `%s` but got conflicting types `%s` ' +
         'and `%s`. The GraphQL server likely violated the globally unique ' +
@@ -308,7 +345,8 @@ function setValue(record: Record, storageKey: string, value: mixed): void {
       const prevType = getType(record) ?? null;
       const nextType = value ?? null;
       warning(
-        isClientID(getDataID(record)) || prevType === nextType,
+        (isClientID(getDataID(record)) && getDataID(record) !== ROOT_ID) ||
+          prevType === nextType,
         'RelayModernRecord: Invalid field update, expected both versions of ' +
           'record `%s` to have the same `%s` but got conflicting types `%s` ' +
           'and `%s`. The GraphQL server likely violated the globally unique ' +
@@ -355,12 +393,58 @@ function setLinkedRecordIDs(
   record[storageKey] = links;
 }
 
+/**
+ * @public
+ *
+ * Set the value of a field to a reference to another record in the actor specific store.
+ */
+function setActorLinkedRecordID(
+  record: Record,
+  storageKey: string,
+  actorIdentifier: ActorIdentifier,
+  linkedID: DataID,
+): void {
+  // See perf note above for why we aren't using computed property access.
+  const link = {};
+  link[REF_KEY] = linkedID;
+  link[ACTOR_IDENTIFIER_KEY] = actorIdentifier;
+  record[storageKey] = link;
+}
+
+/**
+ * @public
+ *
+ * Get link to a record and the actor identifier for the store.
+ */
+function getActorLinkedRecordID(
+  record: Record,
+  storageKey: string,
+): ?[ActorIdentifier, DataID] {
+  const link = record[storageKey];
+  if (link == null) {
+    return link;
+  }
+  invariant(
+    typeof link === 'object' &&
+      typeof link[REF_KEY] === 'string' &&
+      link[ACTOR_IDENTIFIER_KEY] != null,
+    'RelayModernRecord.getActorLinkedRecordID(): Expected `%s.%s` to be an actor specific linked ID, ' +
+      'was `%s`.',
+    record[ID_KEY],
+    storageKey,
+    JSON.stringify(link),
+  );
+
+  return [(link[ACTOR_IDENTIFIER_KEY]: any), (link[REF_KEY]: any)];
+}
+
 module.exports = {
   clone,
   copyFields,
   create,
   freeze,
   getDataID,
+  getInvalidationEpoch,
   getLinkedRecordID,
   getLinkedRecordIDs,
   getType,
@@ -370,4 +454,6 @@ module.exports = {
   setLinkedRecordID,
   setLinkedRecordIDs,
   update,
+  getActorLinkedRecordID,
+  setActorLinkedRecordID,
 };

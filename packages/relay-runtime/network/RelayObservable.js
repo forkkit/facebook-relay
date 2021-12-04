@@ -8,6 +8,8 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
 const isPromise = require('../util/isPromise');
@@ -25,6 +27,7 @@ type SubscriptionFn = {
   (): mixed,
   +unsubscribe?: void,
   +closed?: void,
+  ...
 };
 
 /**
@@ -220,7 +223,7 @@ class RelayObservable<+T> implements Subscribable<T> {
   do(observer: Observer<T>): RelayObservable<T> {
     return RelayObservable.create(sink => {
       const both = (action: any) =>
-        function() {
+        function () {
           try {
             observer[action] && observer[action].apply(observer, arguments);
           } catch (error) {
@@ -418,17 +421,19 @@ class RelayObservable<+T> implements Subscribable<T> {
   /**
    * Returns a Promise which resolves when this Observable yields a first value
    * or when it completes with no value.
+   *
+   * NOTE: The source Observable is *NOT* canceled when the returned Promise
+   * resolves. The Observable is always run to completion.
    */
   toPromise(): Promise<T | void> {
     return new Promise((resolve, reject) => {
-      let subscription;
+      let resolved = false;
       this.subscribe({
-        start(sub) {
-          subscription = sub;
-        },
         next(val) {
-          resolve(val);
-          subscription.unsubscribe();
+          if (!resolved) {
+            resolved = true;
+            resolve(val);
+          }
         },
         error: reject,
         complete: resolve,

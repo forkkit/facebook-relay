@@ -8,7 +8,11 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
+
+import type {ConcreteRequest} from './RelayConcreteNode';
 
 /**
  * Represents a single operation used to processing and normalize runtime
@@ -32,10 +36,10 @@ export type NormalizationLinkedHandle = {|
   +args: ?$ReadOnlyArray<NormalizationArgument>,
   +handle: string,
   +key: string,
-  // T45504512: new connection model
   // NOTE: this property is optional because it's expected to be rarely used
   +dynamicKey?: ?NormalizationArgument,
   +filters: ?$ReadOnlyArray<string>,
+  +handleArgs?: $ReadOnlyArray<NormalizationArgument>,
 |};
 
 export type NormalizationScalarHandle = {|
@@ -45,15 +49,17 @@ export type NormalizationScalarHandle = {|
   +args: ?$ReadOnlyArray<NormalizationArgument>,
   +handle: string,
   +key: string,
-  // T45504512: new connection model
   // NOTE: this property is optional because it's expected to be rarely used
   +dynamicKey?: ?NormalizationArgument,
   +filters: ?$ReadOnlyArray<string>,
+  +handleArgs?: $ReadOnlyArray<NormalizationArgument>,
 |};
 
 export type NormalizationArgument =
-  | NormalizationLiteral
-  | NormalizationVariable;
+  | NormalizationListValueArgument
+  | NormalizationLiteralArgument
+  | NormalizationObjectValueArgument
+  | NormalizationVariableArgument;
 
 export type NormalizationCondition = {|
   +kind: 'Condition',
@@ -68,6 +74,7 @@ export type NormalizationClientExtension = {|
 |};
 
 export type NormalizationField =
+  | NormalizationFlightField
   | NormalizationScalarField
   | NormalizationLinkedField;
 
@@ -75,6 +82,13 @@ export type NormalizationInlineFragment = {|
   +kind: 'InlineFragment',
   +selections: $ReadOnlyArray<NormalizationSelection>,
   +type: string,
+  +abstractKey: ?string,
+|};
+
+export type NormalizationFragmentSpread = {|
+  +kind: 'FragmentSpread',
+  +fragment: NormalizationSplitOperation,
+  +args: ?$ReadOnlyArray<NormalizationArgument>,
 |};
 
 export type NormalizationLinkedField = {|
@@ -88,28 +102,26 @@ export type NormalizationLinkedField = {|
   +selections: $ReadOnlyArray<NormalizationSelection>,
 |};
 
-export type NormalizationConnection = {|
-  +kind: 'Connection',
-  +label: string,
-  +name: string,
-  +args: ?$ReadOnlyArray<NormalizationArgument>,
-  +edges: NormalizationLinkedField,
-  +pageInfo: NormalizationLinkedField,
-  +stream: ?{|
-    if: NormalizationArgument,
-    deferLabel: string,
-    streamLabel: string,
-  |},
+export type NormalizationActorChange = {|
+  +kind: 'ActorChange',
+  +linkedField: NormalizationLinkedField,
 |};
 
 export type NormalizationModuleImport = {|
+  +args: ?$ReadOnlyArray<NormalizationArgument>,
   +kind: 'ModuleImport',
   +documentName: string,
   +fragmentPropName: string,
   +fragmentName: string,
 |};
 
-export type NormalizationLiteral = {|
+export type NormalizationListValueArgument = {|
+  +kind: 'ListValue',
+  +name: string,
+  +items: $ReadOnlyArray<NormalizationArgument | null>,
+|};
+
+export type NormalizationLiteralArgument = {|
   +kind: 'Literal',
   +name: string,
   +type?: ?string,
@@ -119,7 +131,6 @@ export type NormalizationLiteral = {|
 export type NormalizationLocalArgumentDefinition = {|
   +kind: 'LocalArgument',
   +name: string,
-  +type: string,
   +defaultValue: mixed,
 |};
 
@@ -141,21 +152,45 @@ export type NormalizationScalarField = {|
   +storageKey: ?string,
 |};
 
+export type NormalizationFlightField = {|
+  +kind: 'FlightField',
+  +alias: ?string,
+  +name: string,
+  +args: ?$ReadOnlyArray<NormalizationArgument>,
+  +storageKey: ?string,
+|};
+
+export type NormalizationClientComponent = {|
+  +args?: ?$ReadOnlyArray<NormalizationArgument>,
+  +kind: 'ClientComponent',
+  +fragment: NormalizationNode,
+|};
+
+export type NormalizationTypeDiscriminator = {|
+  +kind: 'TypeDiscriminator',
+  +abstractKey: string,
+|};
+
 export type NormalizationSelection =
   | NormalizationCondition
-  | NormalizationConnection
+  | NormalizationClientComponent
   | NormalizationClientExtension
   | NormalizationDefer
   | NormalizationField
+  | NormalizationFlightField
+  | NormalizationFragmentSpread
   | NormalizationHandle
   | NormalizationInlineFragment
   | NormalizationModuleImport
-  | NormalizationStream;
+  | NormalizationStream
+  | NormalizationActorChange
+  | NormalizationTypeDiscriminator;
 
 export type NormalizationSplitOperation = {|
+  +argumentDefinitions?: $ReadOnlyArray<NormalizationLocalArgumentDefinition>,
   +kind: 'SplitOperation',
   +name: string,
-  +metadata: ?{+[key: string]: mixed},
+  +metadata: ?{+[key: string]: mixed, ...},
   +selections: $ReadOnlyArray<NormalizationSelection>,
 |};
 
@@ -163,7 +198,6 @@ export type NormalizationStream = {|
   +if: string | null,
   +kind: 'Stream',
   +label: string,
-  +metadata: ?{+[key: string]: mixed},
   +selections: $ReadOnlyArray<NormalizationSelection>,
 |};
 
@@ -171,15 +205,20 @@ export type NormalizationDefer = {|
   +if: string | null,
   +kind: 'Defer',
   +label: string,
-  +metadata: ?{+[key: string]: mixed},
   +selections: $ReadOnlyArray<NormalizationSelection>,
 |};
 
-export type NormalizationVariable = {|
+export type NormalizationVariableArgument = {|
   +kind: 'Variable',
   +name: string,
   +type?: ?string,
   +variableName: string,
+|};
+
+export type NormalizationObjectValueArgument = {|
+  +kind: 'ObjectValue',
+  +name: string,
+  +fields: $ReadOnlyArray<NormalizationArgument>,
 |};
 
 export type NormalizationSelectableNode =
@@ -188,3 +227,7 @@ export type NormalizationSelectableNode =
   | NormalizationOperation
   | NormalizationSplitOperation
   | NormalizationStream;
+
+export type NormalizationRootNode =
+  | ConcreteRequest
+  | NormalizationSplitOperation;

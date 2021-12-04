@@ -8,13 +8,16 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
 import type {RelayModernFlowtest_user$ref} from './RelayModernFlowtest_user.graphql';
-import type {FragmentReference} from 'relay-runtime';
-declare export opaque type RelayModernFlowtest_badref$ref: FragmentReference;
+import type {FragmentType} from 'relay-runtime';
+
+declare export opaque type RelayModernFlowtest_badref$ref: FragmentType;
 export type RelayModernFlowtest_badref = {|
   +id: string,
-  +$fragmentRefs: RelayModernFlowtest_user$ref,
-  +$refType: RelayModernFlowtest_badref$ref,
+  +$fragmentSpreads: RelayModernFlowtest_user$ref,
+  +$fragmentType: RelayModernFlowtest_badref$ref,
 |};

@@ -8,20 +8,21 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
-
-const RelayModernRecord = require('./RelayModernRecord');
-const RelayRecordSource = require('./RelayRecordSource');
-const RelayResponseNormalizer = require('./RelayResponseNormalizer');
-
-const {ROOT_ID, ROOT_TYPE} = require('./RelayStoreUtils');
 
 import type {PayloadData, PayloadError} from '../network/RelayNetworkTypes';
 import type {NormalizationOptions} from './RelayResponseNormalizer';
 import type {
-  RelayResponsePayload,
   NormalizationSelector,
+  RelayResponsePayload,
 } from './RelayStoreTypes';
+
+const RelayModernRecord = require('./RelayModernRecord');
+const RelayRecordSource = require('./RelayRecordSource');
+const RelayResponseNormalizer = require('./RelayResponseNormalizer');
+const {ROOT_TYPE} = require('./RelayStoreUtils');
 
 function normalizeRelayPayload(
   selector: NormalizationSelector,
@@ -30,7 +31,10 @@ function normalizeRelayPayload(
   options: NormalizationOptions,
 ): RelayResponsePayload {
   const source = RelayRecordSource.create();
-  source.set(ROOT_ID, RelayModernRecord.create(ROOT_ID, ROOT_TYPE));
+  source.set(
+    selector.dataID,
+    RelayModernRecord.create(selector.dataID, ROOT_TYPE),
+  );
   const relayPayload = RelayResponseNormalizer.normalize(
     source,
     selector,

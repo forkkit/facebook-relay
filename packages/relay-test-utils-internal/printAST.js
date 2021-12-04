@@ -8,6 +8,8 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
 /**
@@ -55,7 +57,7 @@ function printASTImpl(ast: mixed, indent: string): string {
         return result;
       } else if (typeof ast.toJSON === 'function') {
         return printASTImpl(
-          // $FlowFixMe - we have to unsafely assume no arguments here
+          // $FlowFixMe[incompatible-use] - we have to unsafely assume no arguments here
           ast.toJSON(),
           indent,
         );

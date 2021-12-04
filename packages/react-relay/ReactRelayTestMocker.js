@@ -8,38 +8,41 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
-
-const areEqual = require('areEqual');
-const invariant = require('invariant');
-const warning = require('warning');
-
-const {
-  createOperationDescriptor,
-  isRelayModernEnvironment,
-  Network,
-} = require('relay-runtime');
 
 import type {
   CacheConfig,
   ConcreteRequest,
-  GraphQLResponse,
+  GraphQLSingularResponse,
   IEnvironment,
   PayloadError,
   RequestParameters,
   Variables,
 } from 'relay-runtime';
 
+const areEqual = require('areEqual');
+const invariant = require('invariant');
+const {
+  Network,
+  createOperationDescriptor,
+  isRelayModernEnvironment,
+} = require('relay-runtime');
+const warning = require('warning');
+
 export type DataWriteConfig = {
   query: ConcreteRequest,
   variables: Variables,
-  payload: GraphQLResponse,
+  payload: GraphQLSingularResponse,
+  ...
 };
 
 export type NetworkWriteConfig = {
   query: ConcreteRequest,
   variables?: Variables,
-  payload: GraphQLResponse | (Variables => GraphQLResponse),
+  payload: GraphQLSingularResponse | (Variables => GraphQLSingularResponse),
+  ...
 };
 
 type PendingFetch = {
@@ -47,7 +50,12 @@ type PendingFetch = {
   variables?: Variables,
   cacheConfig: ?CacheConfig,
   ident: string,
-  deferred: {resolve: Function, reject: Function},
+  deferred: {
+    resolve: Function,
+    reject: Function,
+    ...
+  },
+  ...
 };
 
 /**
@@ -57,7 +65,7 @@ let nextId = 0;
 
 class ReactRelayTestMocker {
   _environment: IEnvironment;
-  _defaults: {[string]: $PropertyType<NetworkWriteConfig, 'payload'>} = {};
+  _defaults: {[string]: NetworkWriteConfig['payload'], ...} = {};
   _pendingFetches: Array<PendingFetch> = [];
 
   constructor(env: IEnvironment) {
@@ -132,7 +140,11 @@ class ReactRelayTestMocker {
    * their components behave under error conditions.
    */
   _mockNetworkLayer(env: IEnvironment): IEnvironment {
-    const fetch = (request, variables, cacheConfig) => {
+    const fetch = (
+      request: RequestParameters,
+      variables: Variables,
+      cacheConfig: CacheConfig,
+    ) => {
       let resolve;
       let reject;
       const promise = new Promise((res, rej) => {
@@ -165,7 +177,7 @@ class ReactRelayTestMocker {
 
     const resolveRawQuery = (
       toResolve: PendingFetch,
-      payload: GraphQLResponse,
+      payload: GraphQLSingularResponse,
     ): void => {
       this._pendingFetches = this._pendingFetches.filter(
         pending => pending !== toResolve,
@@ -177,7 +189,7 @@ class ReactRelayTestMocker {
 
     const rejectQuery = (
       toResolve: PendingFetch,
-      payload: {error: PayloadError},
+      payload: {error: PayloadError, ...},
     ): void => {
       this._pendingFetches = this._pendingFetches.filter(
         pending => pending !== toResolve,
@@ -303,6 +315,7 @@ class ReactRelayTestMocker {
     );
 
     const realPayload =
+      // $FlowFixMe[incompatible-call]
       typeof payload === 'function' ? payload(toResolve.variables) : payload;
 
     // if there are errors, reject the query

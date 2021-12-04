@@ -8,23 +8,24 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
-
-const invariant = require('invariant');
-
-const {convertFetch} = require('./ConvertToExecuteFunction');
 
 import type {RequestParameters} from '../util/RelayConcreteNode';
 import type {CacheConfig, Variables} from '../util/RelayRuntimeTypes';
 import type {
   FetchFunction,
   GraphQLResponse,
-  LogRequestInfoFunction,
   INetwork,
+  LogRequestInfoFunction,
   SubscribeFunction,
   UploadableMap,
 } from './RelayNetworkTypes';
 import type RelayObservable from './RelayObservable';
+
+const {convertFetch} = require('./ConvertToExecuteFunction');
+const invariant = require('invariant');
 
 /**
  * Creates an implementation of the `Network` interface defined in

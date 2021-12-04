@@ -1,0 +1,75 @@
+==================================== INPUT ====================================
+query Test @raw_response_type {
+  node(id: "1") {
+    ...Test_user
+  }
+}
+
+fragment Test_user on User {
+  plainUserRenderer {
+    ...Test_userRenderer @module(name: "Renderer.react")
+  }
+}
+
+fragment Test_userRenderer on PlainUserRenderer {
+  user {
+    username
+  }
+}
+==================================== OUTPUT ===================================
+import { FragmentRefs, Local3DPayload } from "relay-runtime";
+export type Test$variables = {};
+export type Test$data = {
+  readonly node: {
+    readonly " $fragmentSpreads": FragmentRefs<"Test_user">;
+  } | null;
+};
+export type Test_userRenderer = {
+  readonly user: {
+    readonly username: string | null;
+    readonly id: string;
+  } | null;
+};
+export type Test$rawResponse = {
+  readonly node: {
+    readonly __typename: "User";
+    readonly id: string;
+    readonly plainUserRenderer: {
+      readonly __module_operation_Test_user: any | null;
+      readonly __module_component_Test_user: any | null;
+    } | Local3DPayload<"Test_user", {}> | null;
+  } | {
+    readonly __typename: string;
+    readonly id: string;
+  } | null;
+};
+export type Test = {
+  variables: Test$variables;
+  response: Test$data;
+};
+-------------------------------------------------------------------------------
+import { FragmentRefs } from "relay-runtime";
+export type Test_user$data = {
+  readonly plainUserRenderer: {
+    readonly __fragmentPropName: string | null;
+    readonly __module_component: string | null;
+    readonly " $fragmentSpreads": FragmentRefs<"Test_userRenderer">;
+  } | null;
+  readonly " $fragmentType": "Test_user";
+};
+export type Test_user$key = {
+  readonly " $data"?: Test_user$data;
+  readonly " $fragmentSpreads": FragmentRefs<"Test_user">;
+};
+-------------------------------------------------------------------------------
+import { FragmentRefs } from "relay-runtime";
+export type Test_userRenderer$data = {
+  readonly user: {
+    readonly username: string | null;
+  } | null;
+  readonly " $fragmentType": "Test_userRenderer";
+};
+export type Test_userRenderer$key = {
+  readonly " $data"?: Test_userRenderer$data;
+  readonly " $fragmentSpreads": FragmentRefs<"Test_userRenderer">;
+};

@@ -8,11 +8,13 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const RelayObservable = require('./RelayObservable');
-
 import type {ExecuteFunction, FetchFunction} from './RelayNetworkTypes';
+
+const RelayObservable = require('./RelayObservable');
 
 /**
  * Converts a FetchFunction into an ExecuteFunction for use by RelayNetwork.

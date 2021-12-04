@@ -8,12 +8,14 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
+
+import type {DataID} from '../util/RelayRuntimeTypes';
 
 const {generateClientID} = require('./ClientID');
 const {ROOT_ID} = require('./RelayStoreUtils');
-
-import type {DataID} from 'relay-runtime/util/RelayRuntimeTypes';
 
 const VIEWER_ID: DataID = generateClientID(ROOT_ID, 'viewer');
 const VIEWER_TYPE = 'Viewer';

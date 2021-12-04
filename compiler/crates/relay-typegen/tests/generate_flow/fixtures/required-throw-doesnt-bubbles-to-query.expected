@@ -1,0 +1,15 @@
+==================================== INPUT ====================================
+query FooQuery {
+  me @required(action: THROW) {
+    firstName
+    lastName
+  }
+}
+==================================== OUTPUT ===================================
+export type FooQuery$variables = {||};
+export type FooQuery$data = {|
+  +me: {|
+    +firstName: ?string,
+    +lastName: ?string,
+  |},
+|};

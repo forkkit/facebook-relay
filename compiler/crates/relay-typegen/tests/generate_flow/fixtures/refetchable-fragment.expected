@@ -1,0 +1,35 @@
+==================================== INPUT ====================================
+fragment RefetchableFragment on Node
+  @refetchable(queryName: "RefetchableFragmentQuery") {
+  id
+  fragAndField: profilePicture {
+    uri
+  }
+}
+==================================== OUTPUT ===================================
+import type { FragmentType } from "relay-runtime";
+import type { RefetchableFragment$fragmentType } from "RefetchableFragment.graphql";
+export type RefetchableFragmentQuery$variables = {|
+  id: string,
+|};
+export type RefetchableFragmentQuery$data = {|
+  +node: ?{|
+    +$fragmentSpreads: RefetchableFragment$fragmentType,
+  |},
+|};
+-------------------------------------------------------------------------------
+import type { FragmentType } from "relay-runtime";
+declare export opaque type RefetchableFragment$fragmentType: FragmentType;
+import type { RefetchableFragmentQuery$variables } from "RefetchableFragmentQuery.graphql";
+export type RefetchableFragment$data = {|
+  +id: string,
+  +fragAndField: ?{|
+    +uri: ?string,
+  |},
+  +$fragmentType: RefetchableFragment$fragmentType,
+|};
+export type RefetchableFragment$key = {
+  +$data?: RefetchableFragment$data,
+  +$fragmentSpreads: RefetchableFragment$fragmentType,
+  ...
+};

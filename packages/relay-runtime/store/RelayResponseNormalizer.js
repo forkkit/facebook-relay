@@ -8,45 +8,16 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const RelayConnection = require('./RelayConnection');
-const RelayConnectionInterface = require('../handlers/connection/RelayConnectionInterface');
-const RelayModernRecord = require('./RelayModernRecord');
-const RelayProfiler = require('../util/RelayProfiler');
-
-const invariant = require('invariant');
-const warning = require('warning');
-
-const {
-  CONDITION,
-  CLIENT_EXTENSION,
-  DEFER,
-  CONNECTION,
-  INLINE_FRAGMENT,
-  LINKED_FIELD,
-  LINKED_HANDLE,
-  MODULE_IMPORT,
-  SCALAR_FIELD,
-  SCALAR_HANDLE,
-  STREAM,
-} = require('../util/RelayConcreteNode');
-const {generateClientID, isClientID} = require('./ClientID');
-const {createNormalizationSelector} = require('./RelayModernSelector');
-const {
-  formatStorageKey,
-  getArgumentValues,
-  getHandleStorageKey,
-  getModuleComponentKey,
-  getModuleOperationKey,
-  getStorageKey,
-  TYPENAME_KEY,
-} = require('./RelayStoreUtils');
-
+import type {ActorIdentifier} from '../multi-actor-environment/ActorIdentifier';
 import type {PayloadData} from '../network/RelayNetworkTypes';
 import type {
-  NormalizationConnection,
+  NormalizationActorChange,
   NormalizationDefer,
+  NormalizationFlightField,
   NormalizationLinkedField,
   NormalizationModuleImport,
   NormalizationNode,
@@ -54,27 +25,79 @@ import type {
   NormalizationStream,
 } from '../util/NormalizationNode';
 import type {DataID, Variables} from '../util/RelayRuntimeTypes';
-import type {ConnectionInternalEvent} from './RelayConnection';
 import type {
+  FollowupPayload,
   HandleFieldPayload,
   IncrementalDataPlaceholder,
-  ModuleImportPayload,
   MutableRecordSource,
   NormalizationSelector,
+  ReactFlightPayloadDeserializer,
+  ReactFlightReachableExecutableDefinitions,
+  ReactFlightServerErrorHandler,
   Record,
   RelayResponsePayload,
-  RequestDescriptor,
 } from './RelayStoreTypes';
 
+const {
+  ACTOR_IDENTIFIER_FIELD_NAME,
+  getActorIdentifierFromPayload,
+} = require('../multi-actor-environment/ActorUtils');
+const {
+  ACTOR_CHANGE,
+  CLIENT_COMPONENT,
+  CLIENT_EXTENSION,
+  CONDITION,
+  DEFER,
+  FLIGHT_FIELD,
+  FRAGMENT_SPREAD,
+  INLINE_FRAGMENT,
+  LINKED_FIELD,
+  LINKED_HANDLE,
+  MODULE_IMPORT,
+  SCALAR_FIELD,
+  SCALAR_HANDLE,
+  STREAM,
+  TYPE_DISCRIMINATOR,
+} = require('../util/RelayConcreteNode');
+const RelayFeatureFlags = require('../util/RelayFeatureFlags');
+const {generateClientID, isClientID} = require('./ClientID');
+const {getLocalVariables} = require('./RelayConcreteVariables');
+const RelayModernRecord = require('./RelayModernRecord');
+const {createNormalizationSelector} = require('./RelayModernSelector');
+const {
+  REACT_FLIGHT_EXECUTABLE_DEFINITIONS_STORAGE_KEY,
+  REACT_FLIGHT_TREE_STORAGE_KEY,
+  REACT_FLIGHT_TYPE_NAME,
+  refineToReactFlightPayloadData,
+} = require('./RelayStoreReactFlightUtils');
+const {
+  ROOT_ID,
+  ROOT_TYPE,
+  TYPENAME_KEY,
+  getArgumentValues,
+  getHandleStorageKey,
+  getModuleComponentKey,
+  getModuleOperationKey,
+  getStorageKey,
+} = require('./RelayStoreUtils');
+const {TYPE_SCHEMA_TYPE, generateTypeID} = require('./TypeID');
+const areEqual = require('areEqual');
+const invariant = require('invariant');
+const warning = require('warning');
+
 export type GetDataID = (
-  fieldValue: {[string]: mixed},
+  fieldValue: interface {[string]: mixed},
   typeName: string,
 ) => mixed;
 
 export type NormalizationOptions = {|
   +getDataID: GetDataID,
+  +treatMissingFieldsAsNull: boolean,
   +path?: $ReadOnlyArray<string>,
-  +request: RequestDescriptor,
+  +reactFlightPayloadDeserializer?: ?ReactFlightPayloadDeserializer,
+  +reactFlightServerErrorHandler?: ?ReactFlightServerErrorHandler,
+  +shouldProcessClientComponents?: ?boolean,
+  +actorIdentifier?: ?ActorIdentifier,
 |};
 
 /**
@@ -102,32 +125,41 @@ function normalize(
  * Helper for handling payloads.
  */
 class RelayResponseNormalizer {
-  _connectionEvents: Array<ConnectionInternalEvent>;
+  _actorIdentifier: ?ActorIdentifier;
   _getDataId: GetDataID;
   _handleFieldPayloads: Array<HandleFieldPayload>;
+  _treatMissingFieldsAsNull: boolean;
   _incrementalPlaceholders: Array<IncrementalDataPlaceholder>;
   _isClientExtension: boolean;
-  _moduleImportPayloads: Array<ModuleImportPayload>;
+  _isUnmatchedAbstractType: boolean;
+  _followupPayloads: Array<FollowupPayload>;
   _path: Array<string>;
   _recordSource: MutableRecordSource;
-  _request: RequestDescriptor;
   _variables: Variables;
+  _reactFlightPayloadDeserializer: ?ReactFlightPayloadDeserializer;
+  _reactFlightServerErrorHandler: ?ReactFlightServerErrorHandler;
+  _shouldProcessClientComponents: ?boolean;
 
   constructor(
     recordSource: MutableRecordSource,
     variables: Variables,
     options: NormalizationOptions,
   ) {
-    this._connectionEvents = [];
+    this._actorIdentifier = options.actorIdentifier;
     this._getDataId = options.getDataID;
     this._handleFieldPayloads = [];
+    this._treatMissingFieldsAsNull = options.treatMissingFieldsAsNull;
     this._incrementalPlaceholders = [];
     this._isClientExtension = false;
-    this._moduleImportPayloads = [];
+    this._isUnmatchedAbstractType = false;
+    this._followupPayloads = [];
     this._path = options.path ? [...options.path] : [];
     this._recordSource = recordSource;
-    this._request = options.request;
     this._variables = variables;
+    this._reactFlightPayloadDeserializer =
+      options.reactFlightPayloadDeserializer;
+    this._reactFlightServerErrorHandler = options.reactFlightServerErrorHandler;
+    this._shouldProcessClientComponents = options.shouldProcessClientComponents;
   }
 
   normalizeResponse(
@@ -143,12 +175,12 @@ class RelayResponseNormalizer {
     );
     this._traverseSelections(node, record, data);
     return {
-      connectionEvents: this._connectionEvents,
       errors: null,
       fieldPayloads: this._handleFieldPayloads,
       incrementalPlaceholders: this._incrementalPlaceholders,
-      moduleImportPayloads: this._moduleImportPayloads,
+      followupPayloads: this._followupPayloads,
       source: this._recordSource,
+      isFinal: false,
     };
   }
 
@@ -184,17 +216,68 @@ class RelayResponseNormalizer {
           this._normalizeField(node, selection, record, data);
           break;
         case CONDITION:
-          const conditionValue = this._getVariableValue(selection.condition);
+          const conditionValue = Boolean(
+            this._getVariableValue(selection.condition),
+          );
           if (conditionValue === selection.passingValue) {
             this._traverseSelections(selection, record, data);
           }
           break;
-        case INLINE_FRAGMENT:
-          const typeName = RelayModernRecord.getType(record);
-          if (typeName === selection.type) {
-            this._traverseSelections(selection, record, data);
+        case FRAGMENT_SPREAD: {
+          const prevVariables = this._variables;
+          this._variables = getLocalVariables(
+            this._variables,
+            selection.fragment.argumentDefinitions,
+            selection.args,
+          );
+          this._traverseSelections(selection.fragment, record, data);
+          this._variables = prevVariables;
+          break;
+        }
+        case INLINE_FRAGMENT: {
+          const {abstractKey} = selection;
+          if (abstractKey == null) {
+            const typeName = RelayModernRecord.getType(record);
+            if (typeName === selection.type) {
+              this._traverseSelections(selection, record, data);
+            }
+          } else {
+            const implementsInterface = data.hasOwnProperty(abstractKey);
+            const typeName = RelayModernRecord.getType(record);
+            const typeID = generateTypeID(typeName);
+            let typeRecord = this._recordSource.get(typeID);
+            if (typeRecord == null) {
+              typeRecord = RelayModernRecord.create(typeID, TYPE_SCHEMA_TYPE);
+              this._recordSource.set(typeID, typeRecord);
+            }
+            RelayModernRecord.setValue(
+              typeRecord,
+              abstractKey,
+              implementsInterface,
+            );
+            if (implementsInterface) {
+              this._traverseSelections(selection, record, data);
+            }
           }
           break;
+        }
+        case TYPE_DISCRIMINATOR: {
+          const {abstractKey} = selection;
+          const implementsInterface = data.hasOwnProperty(abstractKey);
+          const typeName = RelayModernRecord.getType(record);
+          const typeID = generateTypeID(typeName);
+          let typeRecord = this._recordSource.get(typeID);
+          if (typeRecord == null) {
+            typeRecord = RelayModernRecord.create(typeID, TYPE_SCHEMA_TYPE);
+            this._recordSource.set(typeID, typeRecord);
+          }
+          RelayModernRecord.setValue(
+            typeRecord,
+            abstractKey,
+            implementsInterface,
+          );
+          break;
+        }
         case LINKED_HANDLE:
         case SCALAR_HANDLE:
           const args = selection.args
@@ -203,11 +286,18 @@ class RelayResponseNormalizer {
           const fieldKey = getStorageKey(selection, this._variables);
           const handleKey = getHandleStorageKey(selection, this._variables);
           this._handleFieldPayloads.push({
+            /* $FlowFixMe[class-object-subtyping] added when improving typing
+             * for this parameters */
             args,
             dataID: RelayModernRecord.getDataID(record),
             fieldKey,
             handle: selection.handle,
             handleKey,
+            handleArgs: selection.handleArgs
+              ? /* $FlowFixMe[class-object-subtyping] added when improving typing
+                 * for this parameters */
+                getArgumentValues(selection.handleArgs, this._variables)
+              : {},
           });
           break;
         case MODULE_IMPORT:
@@ -225,8 +315,21 @@ class RelayResponseNormalizer {
           this._traverseSelections(selection, record, data);
           this._isClientExtension = isClientExtension;
           break;
-        case CONNECTION:
-          this._normalizeConnection(node, selection, record, data);
+        case CLIENT_COMPONENT:
+          if (this._shouldProcessClientComponents === false) {
+            break;
+          }
+          this._traverseSelections(selection.fragment, record, data);
+          break;
+        case FLIGHT_FIELD:
+          if (RelayFeatureFlags.ENABLE_REACT_FLIGHT_COMPONENT_FIELD) {
+            this._normalizeFlightField(node, selection, record, data);
+          } else {
+            throw new Error('Flight fields are not yet supported.');
+          }
+          break;
+        case ACTOR_CHANGE:
+          this._normalizeActorChange(node, selection, record, data);
           break;
         default:
           (selection: empty);
@@ -271,6 +374,7 @@ class RelayResponseNormalizer {
           this._variables,
         ),
         typeName: RelayModernRecord.getType(record),
+        actorIdentifier: this._actorIdentifier,
       });
     }
   }
@@ -303,6 +407,7 @@ class RelayResponseNormalizer {
         parentID: RelayModernRecord.getDataID(record),
         node: stream,
         variables: this._variables,
+        actorIdentifier: this._actorIdentifier,
       });
     }
   }
@@ -333,143 +438,18 @@ class RelayResponseNormalizer {
       operationReference ?? null,
     );
     if (operationReference != null) {
-      this._moduleImportPayloads.push({
+      this._followupPayloads.push({
+        kind: 'ModuleImportPayload',
+        args: moduleImport.args,
         data,
         dataID: RelayModernRecord.getDataID(record),
         operationReference,
         path: [...this._path],
         typeName,
         variables: this._variables,
+        actorIdentifier: this._actorIdentifier,
       });
     }
-  }
-
-  /**
-   * Connections are represented in the AST as a LinkedField (with connection-
-   * specific args like after/first stripped) that wraps any metadata fields
-   * such as count, plus a Connection node that represents the page of data
-   * being fetched (the edges + pageInfo). The outer LinkedField is normalized
-   * like any other, and the Connection field is normalized by synthesizing
-   * a record to represent the page that was fetched and normalizing the edges
-   * and pageInfo into that page record - as well as recording a "fetch" event.
-   */
-  _normalizeConnection(
-    parent: NormalizationNode,
-    selection: NormalizationConnection,
-    record: Record,
-    data: PayloadData,
-  ) {
-    // Normalize the data for the page
-    const parentID = RelayModernRecord.getDataID(record);
-    const args =
-      selection.args != null
-        ? getArgumentValues(selection.args, this._variables)
-        : {};
-    const pageStorageKey = formatStorageKey('__connection_page', args);
-    const pageID = generateClientID(parentID, pageStorageKey);
-    let pageRecord = this._recordSource.get(pageID);
-    if (pageRecord == null) {
-      pageRecord = RelayModernRecord.create(pageID, '__ConnectionPage');
-      this._recordSource.set(pageID, pageRecord);
-    }
-    RelayModernRecord.setLinkedRecordID(record, pageStorageKey, pageID);
-
-    this._normalizeField(parent, selection.edges, pageRecord, data);
-    this._normalizeField(parent, selection.pageInfo, pageRecord, data);
-
-    // Construct a "fetch" connection event
-    const connectionID = RelayConnection.createConnectionID(
-      parentID,
-      selection.label,
-    );
-    const {
-      EDGES,
-      END_CURSOR,
-      HAS_NEXT_PAGE,
-      HAS_PREV_PAGE,
-      PAGE_INFO,
-      START_CURSOR,
-    } = RelayConnectionInterface.get();
-
-    const edgeIDs = RelayModernRecord.getLinkedRecordIDs(pageRecord, EDGES);
-    if (edgeIDs == null) {
-      return;
-    }
-    const pageInfoID = RelayModernRecord.getLinkedRecordID(
-      pageRecord,
-      PAGE_INFO,
-    );
-    const pageInfoRecord =
-      pageInfoID != null ? this._recordSource.get(pageInfoID) : null;
-    let endCursor;
-    let hasNextPage;
-    let hasPrevPage;
-    let startCursor;
-    if (pageInfoRecord != null) {
-      endCursor = RelayModernRecord.getValue(pageInfoRecord, END_CURSOR);
-      hasNextPage = RelayModernRecord.getValue(pageInfoRecord, HAS_NEXT_PAGE);
-      hasPrevPage = RelayModernRecord.getValue(pageInfoRecord, HAS_PREV_PAGE);
-      startCursor = RelayModernRecord.getValue(pageInfoRecord, START_CURSOR);
-    }
-
-    // If streaming is enabled, also emit incremental placeholders for the
-    // edges and pageInfo
-    const stream = selection.stream;
-    const enableStream =
-      stream != null
-        ? stream.if.kind === 'Variable'
-          ? this._variables[stream.if.variableName]
-          : stream.if.value
-        : false;
-    if (stream != null && enableStream === true) {
-      this._incrementalPlaceholders.push({
-        kind: 'connection_edge',
-        args,
-        connectionID,
-        label: stream.streamLabel,
-        path: [...this._path],
-        parentID: pageID,
-        node: selection.edges,
-        variables: this._variables,
-      });
-      this._incrementalPlaceholders.push({
-        kind: 'connection_page_info',
-        args,
-        connectionID,
-        data,
-        label: stream.deferLabel,
-        path: [...this._path],
-        selector: createNormalizationSelector(
-          {
-            alias: null,
-            args: null,
-            concreteType: RelayModernRecord.getType(pageRecord),
-            kind: 'LinkedField',
-            name: '',
-            plural: false,
-            selections: [selection.pageInfo],
-            storageKey: null,
-          },
-          pageID,
-          this._variables,
-        ),
-        typeName: RelayModernRecord.getType(pageRecord),
-      });
-    }
-    this._connectionEvents.push({
-      kind: 'fetch',
-      connectionID,
-      args,
-      edgeIDs,
-      pageInfo: {
-        endCursor: typeof endCursor === 'string' ? endCursor : null,
-        startCursor: typeof startCursor === 'string' ? startCursor : null,
-        hasNextPage: typeof hasNextPage === 'boolean' ? hasNextPage : null,
-        hasPrevPage: typeof hasPrevPage === 'boolean' ? hasPrevPage : null,
-      },
-      request: this._request,
-      stream: enableStream === true,
-    });
   }
 
   _normalizeField(
@@ -488,35 +468,63 @@ class RelayResponseNormalizer {
     const fieldValue = data[responseKey];
     if (fieldValue == null) {
       if (fieldValue === undefined) {
-        // Fields that are missing in the response are not set on the record.
-        // There are three main cases where this can occur:
+        // Fields may be missing in the response in two main cases:
         // - Inside a client extension: the server will not generally return
         //   values for these fields, but a local update may provide them.
-        // - Fields on abstract types: these may be missing if the concrete
-        //   response type does not match the abstract type.
-        //
-        // Otherwise, missing fields usually indicate a server or user error (
-        // the latter for manually constructed payloads).
-        if (__DEV__) {
-          warning(
-            this._isClientExtension ||
-              (parent.kind === LINKED_FIELD && parent.concreteType == null)
-              ? true
-              : Object.prototype.hasOwnProperty.call(data, responseKey),
-            'RelayResponseNormalizer: Payload did not contain a value ' +
-              'for field `%s: %s`. Check that you are parsing with the same ' +
-              'query that was used to fetch the payload.',
-            responseKey,
+        // - Inside an abstract type refinement where the concrete type does
+        //   not conform to the interface/union.
+        // However an otherwise-required field may also be missing if the server
+        // is configured to skip fields with `null` values, in which case the
+        // client is assumed to be correctly configured with
+        // treatMissingFieldsAsNull=true.
+        const isOptionalField =
+          this._isClientExtension || this._isUnmatchedAbstractType;
+
+        if (isOptionalField) {
+          // Field not expected to exist regardless of whether the server is pruning null
+          // fields or not.
+          return;
+        } else if (!this._treatMissingFieldsAsNull) {
+          // Not optional and the server is not pruning null fields: field is expected
+          // to be present
+          if (__DEV__) {
+            warning(
+              false,
+              'RelayResponseNormalizer: Payload did not contain a value ' +
+                'for field `%s: %s`. Check that you are parsing with the same ' +
+                'query that was used to fetch the payload.',
+              responseKey,
+              storageKey,
+            );
+          }
+          return;
+        }
+      }
+      if (__DEV__) {
+        if (selection.kind === SCALAR_FIELD) {
+          this._validateConflictingFieldsWithIdenticalId(
+            record,
             storageKey,
+            // When using `treatMissingFieldsAsNull` the conflicting validation raises a false positive
+            // because the value is set using `null` but validated using `fieldValue` which at this point
+            // will be `undefined`.
+            // Setting this to `null` matches the value that we actually set to the `fieldValue`.
+            null,
           );
         }
-        return;
       }
       RelayModernRecord.setValue(record, storageKey, null);
       return;
     }
 
     if (selection.kind === SCALAR_FIELD) {
+      if (__DEV__) {
+        this._validateConflictingFieldsWithIdenticalId(
+          record,
+          storageKey,
+          fieldValue,
+        );
+      }
       RelayModernRecord.setValue(record, storageKey, fieldValue);
     } else if (selection.kind === LINKED_FIELD) {
       this._path.push(responseKey);
@@ -536,6 +544,276 @@ class RelayResponseNormalizer {
     }
   }
 
+  _normalizeActorChange(
+    parent: NormalizationNode,
+    selection: NormalizationActorChange,
+    record: Record,
+    data: PayloadData,
+  ) {
+    const field = selection.linkedField;
+    invariant(
+      typeof data === 'object' && data,
+      '_normalizeActorChange(): Expected data for field `%s` to be an object.',
+      field.name,
+    );
+    const responseKey = field.alias || field.name;
+    const storageKey = getStorageKey(field, this._variables);
+    const fieldValue = data[responseKey];
+
+    if (fieldValue == null) {
+      if (fieldValue === undefined) {
+        const isOptionalField =
+          this._isClientExtension || this._isUnmatchedAbstractType;
+
+        if (isOptionalField) {
+          return;
+        } else if (!this._treatMissingFieldsAsNull) {
+          if (__DEV__) {
+            warning(
+              false,
+              'RelayResponseNormalizer: Payload did not contain a value ' +
+                'for field `%s: %s`. Check that you are parsing with the same ' +
+                'query that was used to fetch the payload.',
+              responseKey,
+              storageKey,
+            );
+          }
+          return;
+        }
+      }
+      RelayModernRecord.setValue(record, storageKey, null);
+      return;
+    }
+
+    const actorIdentifier = getActorIdentifierFromPayload(fieldValue);
+    if (actorIdentifier == null) {
+      if (__DEV__) {
+        warning(
+          false,
+          'RelayResponseNormalizer: Payload did not contain a value ' +
+            'for field `%s`. Check that you are parsing with the same ' +
+            'query that was used to fetch the payload. Payload is `%s`.',
+          ACTOR_IDENTIFIER_FIELD_NAME,
+          JSON.stringify(fieldValue, null, 2),
+        );
+      }
+      RelayModernRecord.setValue(record, storageKey, null);
+      return;
+    }
+
+    // $FlowFixMe[incompatible-call]
+    const typeName = field.concreteType ?? this._getRecordType(fieldValue);
+    const nextID =
+      this._getDataId(
+        // $FlowFixMe[incompatible-call]
+        fieldValue,
+        typeName,
+      ) ||
+      RelayModernRecord.getLinkedRecordID(record, storageKey) ||
+      generateClientID(RelayModernRecord.getDataID(record), storageKey);
+
+    invariant(
+      typeof nextID === 'string',
+      'RelayResponseNormalizer: Expected id on field `%s` to be a string.',
+      storageKey,
+    );
+
+    RelayModernRecord.setActorLinkedRecordID(
+      record,
+      storageKey,
+      actorIdentifier,
+      nextID,
+    );
+
+    this._followupPayloads.push({
+      kind: 'ActorPayload',
+      data: (fieldValue: $FlowFixMe),
+      dataID: nextID,
+      path: [...this._path, responseKey],
+      typeName,
+      variables: this._variables,
+      node: field,
+      actorIdentifier,
+    });
+  }
+
+  _normalizeFlightField(
+    parent: NormalizationNode,
+    selection: NormalizationFlightField,
+    record: Record,
+    data: PayloadData,
+  ) {
+    const responseKey = selection.alias || selection.name;
+    const storageKey = getStorageKey(selection, this._variables);
+    const fieldValue = data[responseKey];
+
+    if (fieldValue == null) {
+      if (fieldValue === undefined) {
+        // Flight field may be missing in the response if:
+        // - It is inside an abstract type refinement where the concrete type does
+        //   not conform to the interface/union.
+        // However an otherwise-required field may also be missing if the server
+        // is configured to skip fields with `null` values, in which case the
+        // client is assumed to be correctly configured with
+        // treatMissingFieldsAsNull=true.
+        if (this._isUnmatchedAbstractType) {
+          // Field not expected to exist regardless of whether the server is pruning null
+          // fields or not.
+          return;
+        } else {
+          // Not optional and the server is not pruning null fields: field is expected
+          // to be present
+          invariant(
+            this._treatMissingFieldsAsNull,
+            'RelayResponseNormalizer: Payload did not contain a value for ' +
+              'field `%s: %s`. Check that you are parsing with the same ' +
+              'query that was used to fetch the payload.',
+            responseKey,
+            storageKey,
+          );
+        }
+      }
+      RelayModernRecord.setValue(record, storageKey, null);
+      return;
+    }
+
+    const reactFlightPayload = refineToReactFlightPayloadData(fieldValue);
+    const reactFlightPayloadDeserializer = this._reactFlightPayloadDeserializer;
+
+    invariant(
+      reactFlightPayload != null,
+      'RelayResponseNormalizer: Expected React Flight payload data to be an ' +
+        'object with `status`, tree`, `queries` and `errors` properties, got ' +
+        '`%s`.',
+      fieldValue,
+    );
+    invariant(
+      typeof reactFlightPayloadDeserializer === 'function',
+      'RelayResponseNormalizer: Expected reactFlightPayloadDeserializer to ' +
+        'be a function, got `%s`.',
+      reactFlightPayloadDeserializer,
+    );
+
+    if (reactFlightPayload.errors.length > 0) {
+      if (typeof this._reactFlightServerErrorHandler === 'function') {
+        this._reactFlightServerErrorHandler(
+          reactFlightPayload.status,
+          reactFlightPayload.errors,
+        );
+      } else {
+        warning(
+          false,
+          'RelayResponseNormalizer: Received server errors for field `%s`.\n\n' +
+            '%s\n%s',
+          responseKey,
+          reactFlightPayload.errors[0].message,
+          reactFlightPayload.errors[0].stack,
+        );
+      }
+    }
+
+    const reactFlightID = generateClientID(
+      RelayModernRecord.getDataID(record),
+      getStorageKey(selection, this._variables),
+    );
+    let reactFlightClientResponseRecord = this._recordSource.get(reactFlightID);
+    if (reactFlightClientResponseRecord == null) {
+      reactFlightClientResponseRecord = RelayModernRecord.create(
+        reactFlightID,
+        REACT_FLIGHT_TYPE_NAME,
+      );
+      this._recordSource.set(reactFlightID, reactFlightClientResponseRecord);
+    }
+
+    if (reactFlightPayload.tree == null) {
+      // This typically indicates that a fatal server error prevented rows from
+      // being written. When this occurs, we should not continue normalization of
+      // the Flight field because the row response is malformed.
+      //
+      // Receiving empty rows is OK because it can indicate the start of a stream.
+      warning(
+        false,
+        'RelayResponseNormalizer: Expected `tree` not to be null. This ' +
+          'typically indicates that a fatal server error prevented any Server ' +
+          'Component rows from being written.',
+      );
+      // We create the flight record with a null value for the tree
+      // and empty reachable definitions
+      RelayModernRecord.setValue(
+        reactFlightClientResponseRecord,
+        REACT_FLIGHT_TREE_STORAGE_KEY,
+        null,
+      );
+      RelayModernRecord.setValue(
+        reactFlightClientResponseRecord,
+        REACT_FLIGHT_EXECUTABLE_DEFINITIONS_STORAGE_KEY,
+        [],
+      );
+      RelayModernRecord.setLinkedRecordID(record, storageKey, reactFlightID);
+      return;
+    }
+
+    // We store the deserialized reactFlightClientResponse in a separate
+    // record and link it to the parent record. This is so we can GC the Flight
+    // tree later even if the parent record is still reachable.
+    const reactFlightClientResponse = reactFlightPayloadDeserializer(
+      reactFlightPayload.tree,
+    );
+
+    RelayModernRecord.setValue(
+      reactFlightClientResponseRecord,
+      REACT_FLIGHT_TREE_STORAGE_KEY,
+      reactFlightClientResponse,
+    );
+
+    const reachableExecutableDefinitions: Array<ReactFlightReachableExecutableDefinitions> =
+      [];
+    for (const query of reactFlightPayload.queries) {
+      if (query.response.data != null) {
+        this._followupPayloads.push({
+          kind: 'ModuleImportPayload',
+          args: null,
+          data: query.response.data,
+          dataID: ROOT_ID,
+          operationReference: query.module,
+          path: [],
+          typeName: ROOT_TYPE,
+          variables: query.variables,
+          actorIdentifier: this._actorIdentifier,
+        });
+      }
+      reachableExecutableDefinitions.push({
+        module: query.module,
+        variables: query.variables,
+      });
+    }
+    for (const fragment of reactFlightPayload.fragments) {
+      if (fragment.response.data != null) {
+        this._followupPayloads.push({
+          kind: 'ModuleImportPayload',
+          args: null,
+          data: fragment.response.data,
+          dataID: fragment.__id,
+          operationReference: fragment.module,
+          path: [],
+          typeName: fragment.__typename,
+          variables: fragment.variables,
+          actorIdentifier: this._actorIdentifier,
+        });
+      }
+      reachableExecutableDefinitions.push({
+        module: fragment.module,
+        variables: fragment.variables,
+      });
+    }
+    RelayModernRecord.setValue(
+      reactFlightClientResponseRecord,
+      REACT_FLIGHT_EXECUTABLE_DEFINITIONS_STORAGE_KEY,
+      reachableExecutableDefinitions,
+    );
+    RelayModernRecord.setLinkedRecordID(record, storageKey, reactFlightID);
+  }
+
   _normalizeLink(
     field: NormalizationLinkedField,
     record: Record,
@@ -549,13 +827,9 @@ class RelayResponseNormalizer {
     );
     const nextID =
       this._getDataId(
-        /* $FlowFixMe(>=0.98.0 site=www,mobile,react_native_fb,oss) This comment
-         * suppresses an error found when Flow v0.98 was deployed. To see the
-         * error delete this comment and run Flow. */
+        // $FlowFixMe[incompatible-variance]
         fieldValue,
-        /* $FlowFixMe(>=0.98.0 site=www,mobile,react_native_fb,oss) This comment
-         * suppresses an error found when Flow v0.98 was deployed. To see the
-         * error delete this comment and run Flow. */
+        // $FlowFixMe[incompatible-variance]
         field.concreteType ?? this._getRecordType(fieldValue),
       ) ||
       // Reuse previously generated client IDs
@@ -566,21 +840,25 @@ class RelayResponseNormalizer {
       'RelayResponseNormalizer: Expected id on field `%s` to be a string.',
       storageKey,
     );
+    if (__DEV__) {
+      this._validateConflictingLinkedFieldsWithIdenticalId(
+        record,
+        RelayModernRecord.getLinkedRecordID(record, storageKey),
+        nextID,
+        storageKey,
+      );
+    }
     RelayModernRecord.setLinkedRecordID(record, storageKey, nextID);
     let nextRecord = this._recordSource.get(nextID);
     if (!nextRecord) {
-      /* $FlowFixMe(>=0.98.0 site=www,mobile,react_native_fb,oss) This comment
-       * suppresses an error found when Flow v0.98 was deployed. To see the
-       * error delete this comment and run Flow. */
+      // $FlowFixMe[incompatible-variance]
       const typeName = field.concreteType || this._getRecordType(fieldValue);
       nextRecord = RelayModernRecord.create(nextID, typeName);
       this._recordSource.set(nextID, nextRecord);
     } else if (__DEV__) {
       this._validateRecordType(nextRecord, field, fieldValue);
     }
-    /* $FlowFixMe(>=0.98.0 site=www,mobile,react_native_fb,oss) This comment
-     * suppresses an error found when Flow v0.98 was deployed. To see the error
-     * delete this comment and run Flow. */
+    // $FlowFixMe[incompatible-variance]
     this._traverseSelections(field, nextRecord, fieldValue);
   }
 
@@ -613,13 +891,9 @@ class RelayResponseNormalizer {
       );
       const nextID =
         this._getDataId(
-          /* $FlowFixMe(>=0.98.0 site=www,mobile,react_native_fb,oss) This comment
-           * suppresses an error found when Flow v0.98 was deployed. To see the
-           * error delete this comment and run Flow. */
+          // $FlowFixMe[incompatible-variance]
           item,
-          /* $FlowFixMe(>=0.98.0 site=www,mobile,react_native_fb,oss) This comment
-           * suppresses an error found when Flow v0.98 was deployed. To see the
-           * error delete this comment and run Flow. */
+          // $FlowFixMe[incompatible-variance]
           field.concreteType ?? this._getRecordType(item),
         ) ||
         (prevIDs && prevIDs[nextIndex]) || // Reuse previously generated client IDs:
@@ -638,18 +912,26 @@ class RelayResponseNormalizer {
       nextIDs.push(nextID);
       let nextRecord = this._recordSource.get(nextID);
       if (!nextRecord) {
-        /* $FlowFixMe(>=0.98.0 site=www,mobile,react_native_fb,oss) This comment
-         * suppresses an error found when Flow v0.98 was deployed. To see the
-         * error delete this comment and run Flow. */
+        // $FlowFixMe[incompatible-variance]
         const typeName = field.concreteType || this._getRecordType(item);
         nextRecord = RelayModernRecord.create(nextID, typeName);
         this._recordSource.set(nextID, nextRecord);
       } else if (__DEV__) {
         this._validateRecordType(nextRecord, field, item);
       }
-      /* $FlowFixMe(>=0.98.0 site=www,mobile,react_native_fb,oss) This comment
-       * suppresses an error found when Flow v0.98 was deployed. To see the
-       * error delete this comment and run Flow. */
+      // NOTE: the check to strip __DEV__ code only works for simple
+      // `if (__DEV__)`
+      if (__DEV__) {
+        if (prevIDs) {
+          this._validateConflictingLinkedFieldsWithIdenticalId(
+            record,
+            prevIDs[nextIndex],
+            nextID,
+            storageKey,
+          );
+        }
+      }
+      // $FlowFixMe[incompatible-variance]
       this._traverseSelections(field, nextRecord, item);
       this._path.pop();
     });
@@ -665,25 +947,74 @@ class RelayResponseNormalizer {
     payload: Object,
   ): void {
     const typeName = field.concreteType ?? this._getRecordType(payload);
+    const dataID = RelayModernRecord.getDataID(record);
     warning(
-      isClientID(RelayModernRecord.getDataID(record)) ||
+      (isClientID(dataID) && dataID !== ROOT_ID) ||
         RelayModernRecord.getType(record) === typeName,
       'RelayResponseNormalizer: Invalid record `%s`. Expected %s to be ' +
         'consistent, but the record was assigned conflicting types `%s` ' +
         'and `%s`. The GraphQL server likely violated the globally unique ' +
         'id requirement by returning the same id for different objects.',
-      RelayModernRecord.getDataID(record),
+      dataID,
       TYPENAME_KEY,
       RelayModernRecord.getType(record),
       typeName,
     );
   }
+
+  /**
+   * Warns if a single response contains conflicting fields with the same id
+   */
+  _validateConflictingFieldsWithIdenticalId(
+    record: Record,
+    storageKey: string,
+    fieldValue: mixed,
+  ): void {
+    // NOTE: Only call this function in DEV
+    if (__DEV__) {
+      const dataID = RelayModernRecord.getDataID(record);
+      var previousValue = RelayModernRecord.getValue(record, storageKey);
+      warning(
+        storageKey === TYPENAME_KEY ||
+          previousValue === undefined ||
+          areEqual(previousValue, fieldValue),
+        'RelayResponseNormalizer: Invalid record. The record contains two ' +
+          'instances of the same id: `%s` with conflicting field, %s and its values: %s and %s. ' +
+          'If two fields are different but share ' +
+          'the same id, one field will overwrite the other.',
+        dataID,
+        storageKey,
+        previousValue,
+        fieldValue,
+      );
+    }
+  }
+
+  /**
+   * Warns if a single response contains conflicting fields with the same id
+   */
+  _validateConflictingLinkedFieldsWithIdenticalId(
+    record: Record,
+    prevID: ?DataID,
+    nextID: DataID,
+    storageKey: string,
+  ): void {
+    // NOTE: Only call this function in DEV
+    if (__DEV__) {
+      warning(
+        prevID === undefined || prevID === nextID,
+        'RelayResponseNormalizer: Invalid record. The record contains ' +
+          'references to the conflicting field, %s and its id values: %s and %s. ' +
+          'We need to make sure that the record the field points ' +
+          'to remains consistent or one field will overwrite the other.',
+        storageKey,
+        prevID,
+        nextID,
+      );
+    }
+  }
 }
 
-// eslint-disable-next-line no-func-assign
-normalize = RelayProfiler.instrument(
-  'RelayResponseNormalizer.normalize',
+module.exports = {
   normalize,
-);
-
-module.exports = {normalize};
+};

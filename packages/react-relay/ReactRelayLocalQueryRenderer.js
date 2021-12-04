@@ -8,31 +8,39 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const React = require('react');
-const ReactRelayContext = require('./ReactRelayContext');
+import type {ReactRelayQueryRendererContext as ReactRelayQueryRendererContextType} from './ReactRelayQueryRendererContext';
+import type {GraphQLTaggedNode, IEnvironment, Variables} from 'relay-runtime';
 
-const {useLayoutEffect, useState, useRef, useMemo} = React;
+const ReactRelayContext = require('./ReactRelayContext');
+const ReactRelayQueryRendererContext = require('./ReactRelayQueryRendererContext');
+const areEqual = require('areEqual');
+const React = require('react');
 const {
   createOperationDescriptor,
   deepFreeze,
   getRequest,
 } = require('relay-runtime');
 
-const areEqual = require('areEqual');
-
-import type {GraphQLTaggedNode, IEnvironment, Variables} from 'relay-runtime';
+const {useLayoutEffect, useState, useRef, useMemo} = React;
 
 type Props = {
   environment: IEnvironment,
   query: GraphQLTaggedNode,
-  // $FlowFixMe
-  render: ({props: ?Object}) => React.Node,
+  // $FlowFixMe[unclear-type]
+  render: ({props: ?Object, ...}) => React.Node,
   variables: Variables,
+  ...
 };
 
-function useDeepCompare<T: {}>(value: T): T {
+const queryRendererContext: ReactRelayQueryRendererContextType = {
+  rootIsQueryRenderer: true,
+};
+
+function useDeepCompare<T: interface {}>(value: T): T {
   const latestValue = React.useRef(value);
   if (!areEqual(latestValue.current, value)) {
     if (__DEV__) {
@@ -60,13 +68,13 @@ function ReactRelayLocalQueryRenderer(props: Props): React.Node {
   const cleanupFnRef = useRef(null);
 
   const snapshot = useMemo(() => {
-    environment.check(operation.root);
+    environment.check(operation);
     const res = environment.lookup(operation.fragment);
     dataRef.current = res.data;
 
     // Run effects here so that the data can be retained
     // and subscribed before the component commits
-    const retainDisposable = environment.retain(operation.root);
+    const retainDisposable = environment.retain(operation);
     const subscribeDisposable = environment.subscribe(res, newSnapshot => {
       dataRef.current = newSnapshot.data;
       forceUpdate(dataRef.current);
@@ -96,7 +104,9 @@ function ReactRelayLocalQueryRenderer(props: Props): React.Node {
 
   return (
     <ReactRelayContext.Provider value={relayContext}>
-      {render({props: dataRef.current})}
+      <ReactRelayQueryRendererContext.Provider value={queryRendererContext}>
+        {render({props: dataRef.current})}
+      </ReactRelayQueryRendererContext.Provider>
     </ReactRelayContext.Provider>
   );
 }

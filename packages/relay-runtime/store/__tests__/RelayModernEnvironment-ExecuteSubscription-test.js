@@ -9,23 +9,27 @@
  * @emails oncall+relay
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const RelayModernEnvironment = require('../RelayModernEnvironment');
-const RelayModernStore = require('../RelayModernStore');
 const RelayNetwork = require('../../network/RelayNetwork');
 const RelayObservable = require('../../network/RelayObservable');
-const RelayRecordSource = require('../RelayRecordSource');
-
+const {getFragment, getRequest, graphql} = require('../../query/GraphQLTag');
+const RelayModernEnvironment = require('../RelayModernEnvironment');
 const {
   createOperationDescriptor,
 } = require('../RelayModernOperationDescriptor');
 const {createReaderSelector} = require('../RelayModernSelector');
-const {generateAndCompile} = require('relay-test-utils-internal');
+const RelayModernStore = require('../RelayModernStore');
+const RelayRecordSource = require('../RelayRecordSource');
+const {disallowWarnings} = require('relay-test-utils-internal');
+
+disallowWarnings();
 
 describe('execute()', () => {
   let callbacks;
-  let commentID;
+  const commentID = 'comment-id';
   let CommentFragment;
   let CommentQuery;
   let complete;
@@ -43,39 +47,38 @@ describe('execute()', () => {
   let queryVariables;
 
   beforeEach(() => {
-    jest.resetModules();
-    commentID = 'comment-id';
-
-    ({
-      CommentCreateSubscription,
-      CommentFragment,
-      CommentQuery,
-    } = generateAndCompile(`
-        subscription CommentCreateSubscription($input: CommentCreateSubscriptionInput!) {
-          commentCreateSubscribe(input: $input) {
-            comment {
-              id
-              body {
-                text
-              }
+    CommentCreateSubscription = getRequest(graphql`
+      subscription RelayModernEnvironmentExecuteSubscriptionTestCommentCreateSubscription(
+        $input: CommentCreateSubscriptionInput!
+      ) {
+        commentCreateSubscribe(input: $input) {
+          comment {
+            id
+            body {
+              text
             }
           }
         }
-
-        fragment CommentFragment on Comment {
+      }
+    `);
+    CommentFragment = getFragment(graphql`
+      fragment RelayModernEnvironmentExecuteSubscriptionTestCommentFragment on Comment {
+        id
+        body {
+          text
+        }
+      }
+    `);
+    CommentQuery = getRequest(graphql`
+      query RelayModernEnvironmentExecuteSubscriptionTestCommentQuery(
+        $id: ID!
+      ) {
+        node(id: $id) {
           id
-          body {
-            text
-          }
+          ...RelayModernEnvironmentExecuteSubscriptionTestCommentFragment
         }
-
-        query CommentQuery($id: ID!) {
-          node(id: $id) {
-            id
-            ...CommentFragment
-          }
-        }
-      `));
+      }
+    `);
     variables = {
       input: {
         clientMutationId: '0',
@@ -108,7 +111,7 @@ describe('execute()', () => {
   });
 
   it('fetches the subscription with the provided subscribe function', () => {
-    environment.execute({operation}).subscribe({});
+    environment.executeSubscription({operation}).subscribe({});
     expect(subscribeFn.mock.calls.length).toBe(1);
     expect(subscribeFn.mock.calls[0][0]).toEqual(
       CommentCreateSubscription.params,
@@ -128,7 +131,7 @@ describe('execute()', () => {
     environment.subscribe(snapshot, callback);
 
     environment
-      .execute({
+      .executeSubscription({
         operation,
         updater: _store => {
           const comment = _store.get(commentID);
@@ -177,7 +180,7 @@ describe('execute()', () => {
     expect(
       environment
         .getOperationTracker()
-        .getPromiseForPendingOperationsAffectingOwner(queryOperation.request),
+        .getPendingOperationsAffectingOwner(queryOperation.request),
     ).toBe(null);
   });
 
@@ -193,7 +196,7 @@ describe('execute()', () => {
     environment.subscribe(snapshot, callback);
 
     const subscription = environment
-      .execute({
+      .executeSubscription({
         operation,
         updater: _store => {
           const comment = _store.get(commentID);
@@ -237,7 +240,7 @@ describe('execute()', () => {
     expect(
       environment
         .getOperationTracker()
-        .getPromiseForPendingOperationsAffectingOwner(queryOperation.request),
+        .getPendingOperationsAffectingOwner(queryOperation.request),
     ).toBe(null);
   });
 });

@@ -8,13 +8,9 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
-
-const areEqual = require('areEqual');
-const invariant = require('invariant');
-
-const {LINKED_FIELD} = require('../util/RelayConcreteNode');
-const {getHandleStorageKey} = require('./RelayStoreUtils');
 
 import type {
   NormalizationLinkedField,
@@ -22,6 +18,11 @@ import type {
 } from '../util/NormalizationNode';
 import type {NormalizationLinkedHandle} from '../util/NormalizationNode';
 import type {Variables} from '../util/RelayRuntimeTypes';
+
+const {LINKED_FIELD} = require('../util/RelayConcreteNode');
+const {getHandleStorageKey} = require('./RelayStoreUtils');
+const areEqual = require('areEqual');
+const invariant = require('invariant');
 
 /**
  * @private

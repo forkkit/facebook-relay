@@ -8,11 +8,12 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const invariant = require('invariant');
-
 const {DEFAULT_HANDLE_KEY} = require('./RelayDefaultHandleKey');
+const invariant = require('invariant');
 
 /**
  * @internal

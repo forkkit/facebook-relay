@@ -20,12 +20,12 @@ if (module.parent) {
   const packagesRoot = path.join(topLevelPackagePath, 'packages');
   const packagePaths = fs
     .readdirSync(packagesRoot)
-    .map(filepath => path.join(packagesRoot, filepath))
-    .filter(filepath => fs.statSync(filepath).isDirectory());
+    .map((filepath) => path.join(packagesRoot, filepath))
+    .filter((filepath) => fs.statSync(filepath).isDirectory());
 
   const errors = testDependencies(topLevelPackagePath, packagePaths);
   if (errors.length !== 0) {
-    errors.forEach(error => console.error(error));
+    errors.forEach((error) => console.error(error));
     process.exit(1);
   }
 }
@@ -68,12 +68,16 @@ function testPackageDependencies(topLevelPackagePath, packagePath) {
     `${packageName} should have no bundled dependencies.`,
   );
 
-  expectEqual(
-    errors,
-    packageJson.devDependencies,
-    undefined,
-    `${packageName} should have no dev dependencies.`,
-  );
+  // `babel-plugin-relay` requires its devDependencies to be declared because it is
+  // integrated into two workspaces at Facebook.
+  if (packageJson.name !== 'babel-plugin-relay') {
+    expectEqual(
+      errors,
+      packageJson.devDependencies,
+      undefined,
+      `${packageName} should have no dev dependencies.`,
+    );
+  }
 
   const requiredRepoPackages = new Set([
     'relay-compiler',

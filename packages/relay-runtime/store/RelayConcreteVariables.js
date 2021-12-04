@@ -8,13 +8,20 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const invariant = require('invariant');
-
-import type {NormalizationOperation} from '../util/NormalizationNode';
+import type {
+  NormalizationArgument,
+  NormalizationLocalArgumentDefinition,
+  NormalizationOperation,
+} from '../util/NormalizationNode';
 import type {ReaderFragment} from '../util/ReaderNode';
 import type {Variables} from '../util/RelayRuntimeTypes';
+
+const {getArgumentValues} = require('./RelayStoreUtils');
+const invariant = require('invariant');
 
 /**
  * Determines the variables that are in scope for a fragment given the variables
@@ -88,7 +95,26 @@ function getOperationVariables(
   return operationVariables;
 }
 
+function getLocalVariables(
+  currentVariables: Variables,
+  argumentDefinitions: ?$ReadOnlyArray<NormalizationLocalArgumentDefinition>,
+  args: ?$ReadOnlyArray<NormalizationArgument>,
+): Variables {
+  if (argumentDefinitions == null) {
+    return currentVariables;
+  }
+  const nextVariables = {...currentVariables};
+  const nextArgs = args ? getArgumentValues(args, currentVariables) : {};
+  argumentDefinitions.forEach(def => {
+    // $FlowFixMe[cannot-write]
+    const value = nextArgs[def.name] ?? def.defaultValue;
+    nextVariables[def.name] = value;
+  });
+  return nextVariables;
+}
+
 module.exports = {
+  getLocalVariables,
   getFragmentVariables,
   getOperationVariables,
 };

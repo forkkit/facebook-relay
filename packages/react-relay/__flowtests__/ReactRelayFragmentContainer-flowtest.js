@@ -8,13 +8,14 @@
  * @format
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const React = require('react');
+'use strict';
 
 const {
   createContainer: createFragmentContainer,
 } = require('../ReactRelayFragmentContainer');
+const React = require('react');
 const {graphql} = require('relay-runtime');
 
 /**
@@ -22,7 +23,7 @@ const {graphql} = require('relay-runtime');
  * type-checked correctly on Relay components.
  */
 
-const FooComponent = ({requiredProp}: {requiredProp: string}) => (
+const FooComponent = ({requiredProp}: {requiredProp: string, ...}) => (
   <div>{requiredProp}</div>
 );
 
@@ -39,9 +40,10 @@ const Foo = createFragmentContainer(FooComponent, {
 });
 
 class BarComponent extends React.Component<{
-  optionalProp?: {foo: number},
+  optionalProp?: {foo: number, ...},
   defaultProp: string,
   requiredProp: string,
+  ...
 }> {
   static defaultProps = {
     defaultProp: 'default',

@@ -8,32 +8,41 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const invariant = require('invariant');
+import type {GraphQLTaggedNode} from '../query/GraphQLTag';
+import type {FragmentType} from './RelayStoreTypes';
 
-const {getInlineDataFragment} = require('../query/RelayModernGraphQLTag');
+const {getInlineDataFragment} = require('../query/GraphQLTag');
 const {FRAGMENTS_KEY} = require('./RelayStoreUtils');
-
-import type {GraphQLTaggedNode} from '../query/RelayModernGraphQLTag';
-import type {FragmentReference} from './RelayStoreTypes';
+const invariant = require('invariant');
 
 /**
  * Reads an @inline data fragment that was spread into the parent fragment.
  */
 
 declare function readInlineData<
-  TRef: FragmentReference,
+  TFragmentType: FragmentType,
   TData,
-  TKey: {+$data?: TData, +$fragmentRefs: TRef},
+  TKey: {
+    +$data?: TData,
+    +$fragmentSpreads: TFragmentType,
+    ...
+  },
 >(
   fragment: GraphQLTaggedNode,
   fragmentRef: TKey,
 ): TData;
 declare function readInlineData<
-  TRef: FragmentReference,
+  TFragmentType: FragmentType,
   TData,
-  TKey: ?{+$data?: TData, +$fragmentRefs: TRef},
+  TKey: ?{
+    +$data?: TData,
+    +$fragmentSpreads: TFragmentType,
+    ...
+  },
 >(
   fragment: GraphQLTaggedNode,
   fragmentRef: null | void,
@@ -51,7 +60,7 @@ function readInlineData(
     'readInlineData(): Expected an object, got `%s`.',
     typeof fragmentRef,
   );
-  // $FlowFixMe
+  // $FlowFixMe[incompatible-use]
   const inlineData = fragmentRef[FRAGMENTS_KEY]?.[inlineDataFragment.name];
   invariant(
     inlineData != null,

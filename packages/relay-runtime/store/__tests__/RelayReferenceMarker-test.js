@@ -9,26 +9,21 @@
  * @emails oncall+relay
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const RelayModernTestUtils = require('relay-test-utils-internal');
-const RelayRecordSource = require('../RelayRecordSource');
-
+const {getFragment, getRequest, graphql} = require('../../query/GraphQLTag');
+const RelayFeatureFlags = require('../../util/RelayFeatureFlags');
 const {createNormalizationSelector} = require('../RelayModernSelector');
+const RelayRecordSource = require('../RelayRecordSource');
 const {mark} = require('../RelayReferenceMarker');
 const {ROOT_ID} = require('../RelayStoreUtils');
 
-function getEmptyConnectionEvents() {
-  return null;
-}
-
 describe('RelayReferenceMarker', () => {
-  const {generateAndCompile} = RelayModernTestUtils;
   let source;
 
   beforeEach(() => {
-    jest.resetModules();
-
     const data = {
       '1': {
         __id: '1',
@@ -85,9 +80,8 @@ describe('RelayReferenceMarker', () => {
   });
 
   it('marks referenced records', () => {
-    const {FooQuery} = generateAndCompile(
-      `
-      query FooQuery($id: ID, $size: [Int]) {
+    const FooQuery = getRequest(graphql`
+      query RelayReferenceMarkerTest1Query($id: ID, $size: [Int]) {
         node(id: $id) {
           id
           __typename
@@ -96,13 +90,13 @@ describe('RelayReferenceMarker', () => {
               name
             }
           }
-          ...UserProfile @arguments(size: $size)
+          ...RelayReferenceMarkerTest1Fragment @arguments(size: $size)
         }
       }
-
-      fragment UserProfile on User @argumentDefinitions(
-        size: {type: "[Int]"}
-      ) {
+    `);
+    graphql`
+      fragment RelayReferenceMarkerTest1Fragment on User
+      @argumentDefinitions(size: {type: "[Int]"}) {
         ... on User {
           firstName
           friends(first: 3) {
@@ -119,8 +113,7 @@ describe('RelayReferenceMarker', () => {
           }
         }
       }
-    `,
-    );
+    `;
     const references = new Set();
     mark(
       source,
@@ -129,8 +122,6 @@ describe('RelayReferenceMarker', () => {
         size: 32,
       }),
       references,
-      new Set(),
-      getEmptyConnectionEvents,
     );
     expect(Array.from(references).sort()).toEqual([
       '1',
@@ -195,9 +186,8 @@ describe('RelayReferenceMarker', () => {
       },
     };
     source = RelayRecordSource.create(data);
-    const {UserProfile} = generateAndCompile(
-      `
-      query UserProfile($id: ID!) {
+    const UserProfile = getRequest(graphql`
+      query RelayReferenceMarkerTest2Query($id: ID!) {
         node(id: $id) {
           ... on User {
             friends(first: 1) @__clientField(handle: "bestFriends") {
@@ -212,15 +202,14 @@ describe('RelayReferenceMarker', () => {
           }
         }
       }
-    `,
-    );
+    `);
     const references = new Set();
     mark(
       source,
-      createNormalizationSelector(UserProfile.operation, ROOT_ID, {id: '1'}),
+      createNormalizationSelector(UserProfile.operation, ROOT_ID, {
+        id: '1',
+      }),
       references,
-      new Set(),
-      getEmptyConnectionEvents,
     );
     expect(Array.from(references).sort()).toEqual([
       '1',
@@ -297,16 +286,16 @@ describe('RelayReferenceMarker', () => {
       },
     };
     source = RelayRecordSource.create(data);
-    const {UserProfile} = generateAndCompile(
-      `
-      query UserProfile($id: ID!, $orderby: [String]) {
+    const UserProfile = getRequest(graphql`
+      query RelayReferenceMarkerTest3Query($id: ID!, $orderby: [String]) {
         node(id: $id) {
           ... on User {
-            friends(first: 1, orderby: $orderby) @__clientField(
-              handle: "bestFriends"
-              key: "UserProfile_friends"
-              filters: ["orderby"]
-            ) {
+            friends(first: 1, orderby: $orderby)
+              @__clientField(
+                handle: "bestFriends"
+                key: "UserProfile_friends"
+                filters: ["orderby"]
+              ) {
               edges {
                 cursor
                 node {
@@ -318,8 +307,7 @@ describe('RelayReferenceMarker', () => {
           }
         }
       }
-    `,
-    );
+    `);
     let references = new Set();
     mark(
       source,
@@ -328,8 +316,6 @@ describe('RelayReferenceMarker', () => {
         orderby: ['first name'],
       }),
       references,
-      new Set(),
-      getEmptyConnectionEvents,
     );
     expect(Array.from(references).sort()).toEqual([
       '1',
@@ -350,8 +336,6 @@ describe('RelayReferenceMarker', () => {
         orderby: ['last name'],
       }),
       references,
-      new Set(),
-      getEmptyConnectionEvents,
     );
     expect(Array.from(references).sort()).toEqual([
       '1',
@@ -413,16 +397,17 @@ describe('RelayReferenceMarker', () => {
       },
     };
     source = RelayRecordSource.create(data);
-    const {FooQuery} = generateAndCompile(
-      `
-      query FooQuery($id: ID) {
+    const FooQuery = getRequest(graphql`
+      query RelayReferenceMarkerTest4Query($id: ID) {
         node(id: $id) {
           id
           __typename
-          ...UserProfile
+          ...RelayReferenceMarkerTest2Fragment
         }
       }
-      fragment UserProfile on User {
+    `);
+    graphql`
+      fragment RelayReferenceMarkerTest2Fragment on User {
         client_foo {
           client_name
           profile_picture(scale: 2) {
@@ -445,23 +430,7 @@ describe('RelayReferenceMarker', () => {
           firstName
         }
       }
-      extend type User {
-        nickname: String
-        best_friends: FriendsConnection
-        client_foo: Foo
-      }
-      extend type FriendsConnection {
-        client_friends_connection_field: String
-      }
-      extend type FriendsEdge {
-        client_friend_edge_field: String
-      }
-      type Foo {
-        client_name: String
-        profile_picture(scale: Float): Image
-      }
-    `,
-    );
+    `;
     const references = new Set();
     mark(
       source,
@@ -470,8 +439,6 @@ describe('RelayReferenceMarker', () => {
         size: 32,
       }),
       references,
-      new Set(),
-      getEmptyConnectionEvents,
     );
     expect(Array.from(references).sort()).toEqual([
       '1',
@@ -490,38 +457,43 @@ describe('RelayReferenceMarker', () => {
     let loader;
 
     beforeEach(() => {
-      const nodes = generateAndCompile(`
-        fragment PlainUserNameRenderer_name on PlainUserNameRenderer {
-          plaintext
-          data {
-            text
+      const nodes = {};
+      nodes.RelayReferenceMarkerTestPlainUserNameRenderer_name =
+        getFragment(graphql`
+          fragment RelayReferenceMarkerTestPlainUserNameRenderer_name on PlainUserNameRenderer {
+            plaintext
+            data {
+              text
+            }
           }
-        }
-
-        fragment MarkdownUserNameRenderer_name on MarkdownUserNameRenderer {
-          markdown
-          data {
-            markup
+        `);
+      nodes.RelayReferenceMarkerTestMarkdownUserNameRenderer_name =
+        getFragment(graphql`
+          fragment RelayReferenceMarkerTestMarkdownUserNameRenderer_name on MarkdownUserNameRenderer {
+            markdown
+            data {
+              markup
+            }
           }
-        }
-
-        fragment BarFragment on User {
+        `);
+      graphql`
+        fragment RelayReferenceMarkerTest3Fragment on User {
           id
           nameRenderer @match {
-            ...PlainUserNameRenderer_name
+            ...RelayReferenceMarkerTestPlainUserNameRenderer_name
               @module(name: "PlainUserNameRenderer.react")
-            ...MarkdownUserNameRenderer_name
+            ...RelayReferenceMarkerTestMarkdownUserNameRenderer_name
               @module(name: "MarkdownUserNameRenderer.react")
           }
         }
-
-        query BarQuery($id: ID!) {
+      `;
+      BarQuery = getRequest(graphql`
+        query RelayReferenceMarkerTest5Query($id: ID!) {
           node(id: $id) {
-            ...BarFragment
+            ...RelayReferenceMarkerTest3Fragment
           }
         }
       `);
-      BarQuery = nodes.BarQuery;
       loader = {
         get: jest.fn(
           moduleName => nodes[String(moduleName).replace(/\$.*/, '')],
@@ -539,21 +511,23 @@ describe('RelayReferenceMarker', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'PlainUserNameRenderer',
+            __module_component_RelayReferenceMarkerTest3Fragment:
+              'PlainUserNameRenderer.react',
+            __module_operation_RelayReferenceMarkerTest3Fragment:
+              'RelayReferenceMarkerTestPlainUserNameRenderer_name$normalization.graphql',
+            plaintext: 'plain name',
+            data: {__ref: 'data'},
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'PlainUserNameRenderer',
-          __module_component_BarFragment: 'PlainUserNameRenderer.react',
-          __module_operation_BarFragment:
-            'PlainUserNameRenderer_name$normalization.graphql',
-          plaintext: 'plain name',
-          data: {__ref: 'data'},
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -573,8 +547,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual([
@@ -592,21 +564,23 @@ describe('RelayReferenceMarker', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'MarkdownUserNameRenderer',
+            __module_component_RelayReferenceMarkerTest3Fragment:
+              'MarkdownUserNameRenderer.react',
+            __module_operation_RelayReferenceMarkerTest3Fragment:
+              'RelayReferenceMarkerTestMarkdownUserNameRenderer_name$normalization.graphql',
+            markdown: 'markdown payload',
+            data: {__ref: 'data'},
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'MarkdownUserNameRenderer',
-          __module_component_BarFragment: 'MarkdownUserNameRenderer.react',
-          __module_operation_BarFragment:
-            'MarkdownUserNameRenderer_name$normalization.graphql',
-          markdown: 'markdown payload',
-          data: {__ref: 'data'},
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -626,8 +600,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual([
@@ -647,17 +619,18 @@ describe('RelayReferenceMarker', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'MarkdownUserNameRenderer',
+            // NOTE: markdown/data fields are missing, data not processed.
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'MarkdownUserNameRenderer',
-          // NOTE: markdown/data fields are missing, data not processed.
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -672,8 +645,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         // Return null to indicate the fragment is not loaded yet
         {
           get: _ => null,
@@ -694,21 +665,23 @@ describe('RelayReferenceMarker', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'MarkdownUserNameRenderer',
+            __module_component_RelayReferenceMarkerTest3Fragment:
+              'MarkdownUserNameRenderer.react',
+            __module_operation_RelayReferenceMarkerTest3Fragment:
+              'RelayReferenceMarkerTestMarkdownUserNameRenderer_name$normalization.graphql',
+            // NOTE: 'markdown' field missing
+            data: {__ref: 'data'},
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'MarkdownUserNameRenderer',
-          __module_component_BarFragment: 'MarkdownUserNameRenderer.react',
-          __module_operation_BarFragment:
-            'MarkdownUserNameRenderer_name$normalization.graphql',
-          // NOTE: 'markdown' field missing
-          data: {__ref: 'data'},
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -728,8 +701,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual([
@@ -747,18 +718,19 @@ describe('RelayReferenceMarker', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'MarkdownUserNameRenderer',
+            markdown: 'markdown text',
+            // NOTE: 'data' field missing
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'MarkdownUserNameRenderer',
-          markdown: 'markdown text',
-          // NOTE: 'data' field missing
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -773,8 +745,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual([
@@ -790,17 +760,18 @@ describe('RelayReferenceMarker', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-            __ref:
-              'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            {
+              __ref:
+                'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            },
+        },
+        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+          {
+            __id: 'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
+            __typename: 'CustomNameRenderer',
+            customField: 'custom value',
           },
-        },
-        'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': {
-          __id:
-            'client:1:nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])',
-          __typename: 'CustomNameRenderer',
-          customField: 'custom value',
-        },
         'client:root': {
           __id: 'client:root',
           __typename: '__Root',
@@ -815,8 +786,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual([
@@ -832,7 +801,8 @@ describe('RelayReferenceMarker', () => {
           __id: '1',
           id: '1',
           __typename: 'User',
-          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])': null,
+          'nameRenderer(supported:["PlainUserNameRenderer","MarkdownUserNameRenderer"])':
+            null,
         },
         'client:root': {
           __id: 'client:root',
@@ -848,8 +818,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual(['1', 'client:root']);
@@ -876,8 +844,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual(['1', 'client:root']);
@@ -889,38 +855,44 @@ describe('RelayReferenceMarker', () => {
     let loader;
 
     beforeEach(() => {
-      const nodes = generateAndCompile(`
-        fragment PlainUserNameRenderer_name on PlainUserNameRenderer {
-          plaintext
-          data {
-            text
+      const nodes = {};
+      nodes.RelayReferenceMarkerTest2PlainUserNameRenderer_name =
+        getFragment(graphql`
+          fragment RelayReferenceMarkerTest2PlainUserNameRenderer_name on PlainUserNameRenderer {
+            plaintext
+            data {
+              text
+            }
           }
-        }
-
-        fragment MarkdownUserNameRenderer_name on MarkdownUserNameRenderer {
-          markdown
-          data {
-            markup
+        `);
+      nodes.RelayReferenceMarkerTest2MarkdownUserNameRenderer_name =
+        getFragment(graphql`
+          fragment RelayReferenceMarkerTest2MarkdownUserNameRenderer_name on MarkdownUserNameRenderer {
+            markdown
+            data {
+              markup
+            }
           }
-        }
-
-        fragment BarFragment on User {
+        `);
+      graphql`
+        fragment RelayReferenceMarkerTest4Fragment on User {
           id
-          nameRenderer { # intentionally no @match
-            ...PlainUserNameRenderer_name
+          nameRenderer {
+            # intentionally no @match
+            ...RelayReferenceMarkerTest2PlainUserNameRenderer_name
               @module(name: "PlainUserNameRenderer.react")
-            ...MarkdownUserNameRenderer_name
+            ...RelayReferenceMarkerTest2MarkdownUserNameRenderer_name
               @module(name: "MarkdownUserNameRenderer.react")
           }
         }
-
-        query BarQuery($id: ID!) {
+      `;
+      BarQuery = getRequest(graphql`
+        query RelayReferenceMarkerTest6Query($id: ID!) {
           node(id: $id) {
-            ...BarFragment
+            ...RelayReferenceMarkerTest4Fragment
           }
         }
       `);
-      BarQuery = nodes.BarQuery;
       loader = {
         get: jest.fn(
           moduleName => nodes[String(moduleName).replace(/\$.*/, '')],
@@ -945,9 +917,10 @@ describe('RelayReferenceMarker', () => {
         'client:1:nameRenderer': {
           __id: 'client:1:nameRenderer',
           __typename: 'PlainUserNameRenderer',
-          __module_component_BarFragment: 'PlainUserNameRenderer.react',
-          __module_operation_BarFragment:
-            'PlainUserNameRenderer_name$normalization.graphql',
+          __module_component_RelayReferenceMarkerTest4Fragment:
+            'PlainUserNameRenderer.react',
+          __module_operation_RelayReferenceMarkerTest4Fragment:
+            'RelayReferenceMarkerTest2PlainUserNameRenderer_name$normalization.graphql',
           plaintext: 'plain name',
           data: {__ref: 'data'},
         },
@@ -970,8 +943,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual([
@@ -996,9 +967,10 @@ describe('RelayReferenceMarker', () => {
         'client:1:nameRenderer': {
           __id: 'client:1:nameRenderer',
           __typename: 'MarkdownUserNameRenderer',
-          __module_component_BarFragment: 'MarkdownUserNameRenderer.react',
-          __module_operation_BarFragment:
-            'MarkdownUserNameRenderer_name$normalization.graphql',
+          __module_component_RelayReferenceMarkerTest4Fragment:
+            'MarkdownUserNameRenderer.react',
+          __module_operation_RelayReferenceMarkerTest4Fragment:
+            'RelayReferenceMarkerTest2MarkdownUserNameRenderer_name$normalization.graphql',
           markdown: 'markdown payload',
           data: {__ref: 'data'},
         },
@@ -1021,8 +993,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual([
@@ -1065,8 +1035,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         // Return null to indicate the fragment is not loaded yet
         {
           get: _ => null,
@@ -1094,9 +1062,10 @@ describe('RelayReferenceMarker', () => {
         'client:1:nameRenderer': {
           __id: 'client:1:nameRenderer',
           __typename: 'MarkdownUserNameRenderer',
-          __module_component_BarFragment: 'MarkdownUserNameRenderer.react',
-          __module_operation_BarFragment:
-            'MarkdownUserNameRenderer_name$normalization.graphql',
+          __module_component_RelayReferenceMarkerTest4Fragment:
+            'MarkdownUserNameRenderer.react',
+          __module_operation_RelayReferenceMarkerTest4Fragment:
+            'RelayReferenceMarkerTest2MarkdownUserNameRenderer_name$normalization.graphql',
           // NOTE: 'markdown' field missing
           data: {__ref: 'data'},
         },
@@ -1119,8 +1088,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual([
@@ -1162,8 +1129,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual([
@@ -1202,8 +1167,6 @@ describe('RelayReferenceMarker', () => {
           id: '1',
         }),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
         loader,
       );
       expect(Array.from(references).sort()).toEqual([
@@ -1212,28 +1175,76 @@ describe('RelayReferenceMarker', () => {
         'client:root',
       ]);
     });
+
+    it('throws if no operation loader is provided', () => {
+      const storeData = {
+        '1': {
+          __id: '1',
+          id: '1',
+          __typename: 'User',
+          nameRenderer: {
+            __ref: 'client:1:nameRenderer',
+          },
+        },
+        'client:1:nameRenderer': {
+          __id: 'client:1:nameRenderer',
+          __typename: 'PlainUserNameRenderer',
+          __module_component_RelayReferenceMarkerTest4Fragment:
+            'PlainUserNameRenderer.react',
+          __module_operation_RelayReferenceMarkerTest4Fragment:
+            'RelayReferenceMarkerTest2PlainUserNameRenderer_name$normalization.graphql',
+          plaintext: 'plain name',
+          data: {__ref: 'data'},
+        },
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {__ref: '1'},
+        },
+        data: {
+          __id: 'data',
+          __typename: 'PlainUserNameData',
+          text: 'text',
+        },
+      };
+      source = RelayRecordSource.create(storeData);
+      const references = new Set();
+      expect(() =>
+        mark(
+          source,
+          createNormalizationSelector(BarQuery.operation, 'client:root', {
+            id: '1',
+          }),
+          references,
+          null, // operationLoader
+        ),
+      ).toThrow(
+        'RelayReferenceMarker: Expected an operationLoader to be configured when ' +
+          'using `@module`. Could not load fragment `RelayReferenceMarkerTest2PlainUserNameRenderer_name` ' +
+          'in operation `RelayReferenceMarkerTest6Query`.',
+      );
+    });
   });
 
   describe('when @defer directive is present', () => {
     let Query;
 
     beforeEach(() => {
-      const nodes = generateAndCompile(
-        `
-          fragment TestFragment on Feedback {
-            id
-            actors {
-              name
-            }
+      graphql`
+        fragment RelayReferenceMarkerTest5Fragment on Feedback {
+          id
+          actors {
+            name
           }
-
-          query TestQuery($id: ID!) {
-            node(id: $id) {
-              ...TestFragment @defer(label: "TestFragment")
-            }
-          }`,
-      );
-      Query = nodes.TestQuery;
+        }
+      `;
+      Query = getRequest(graphql`
+        query RelayReferenceMarkerTest7Query($id: ID!) {
+          node(id: $id) {
+            ...RelayReferenceMarkerTest5Fragment @defer(label: "TestFragment")
+          }
+        }
+      `);
     });
 
     it('marks references when deferred selections are fetched', () => {
@@ -1262,8 +1273,6 @@ describe('RelayReferenceMarker', () => {
         recordSource,
         createNormalizationSelector(Query.operation, 'client:root', {id: '1'}),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
       );
       expect(Array.from(references).sort()).toEqual(['1', '2', 'client:root']);
     });
@@ -1288,8 +1297,6 @@ describe('RelayReferenceMarker', () => {
         recordSource,
         createNormalizationSelector(Query.operation, 'client:root', {id: '1'}),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
       );
       expect(Array.from(references).sort()).toEqual(['1', 'client:root']);
     });
@@ -1299,22 +1306,21 @@ describe('RelayReferenceMarker', () => {
     let Query;
 
     beforeEach(() => {
-      const nodes = generateAndCompile(
-        `
-          fragment TestFragment on Feedback {
-            id
-            actors @stream(label: "TestFragmentActors", initial_count: 0) {
-              name
-            }
+      graphql`
+        fragment RelayReferenceMarkerTest6Fragment on Feedback {
+          id
+          actors @stream(label: "TestFragmentActors", initial_count: 0) {
+            name
           }
-
-          query TestQuery($id: ID!) {
-            node(id: $id) {
-              ...TestFragment
-            }
-          }`,
-      );
-      Query = nodes.TestQuery;
+        }
+      `;
+      Query = getRequest(graphql`
+        query RelayReferenceMarkerTest8Query($id: ID!) {
+          node(id: $id) {
+            ...RelayReferenceMarkerTest6Fragment
+          }
+        }
+      `);
     });
 
     it('marks references when streamed selections are fetched', () => {
@@ -1343,8 +1349,6 @@ describe('RelayReferenceMarker', () => {
         recordSource,
         createNormalizationSelector(Query.operation, 'client:root', {id: '1'}),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
       );
       expect(Array.from(references).sort()).toEqual(['1', '2', 'client:root']);
     });
@@ -1369,10 +1373,281 @@ describe('RelayReferenceMarker', () => {
         recordSource,
         createNormalizationSelector(Query.operation, 'client:root', {id: '1'}),
         references,
-        new Set(),
-        getEmptyConnectionEvents,
       );
       expect(Array.from(references).sort()).toEqual(['1', 'client:root']);
+    });
+  });
+
+  describe('with feature ENABLE_REACT_FLIGHT_COMPONENT_FIELD', () => {
+    let FlightQuery;
+    let InnerQuery;
+    let operationLoader;
+
+    const readRoot = () => {
+      return {
+        $$typeof: Symbol.for('react.element'),
+        type: 'div',
+        key: null,
+        ref: null,
+        props: {foo: 1},
+      };
+    };
+
+    beforeEach(() => {
+      RelayFeatureFlags.ENABLE_REACT_FLIGHT_COMPONENT_FIELD = true;
+
+      FlightQuery = getRequest(graphql`
+        query RelayReferenceMarkerTestFlightQuery($id: ID!, $count: Int!) {
+          node(id: $id) {
+            ... on Story {
+              flightComponent(condition: true, count: $count, id: $id)
+            }
+          }
+        }
+      `);
+      InnerQuery = getRequest(graphql`
+        query RelayReferenceMarkerTestInnerQuery($id: ID!) {
+          node(id: $id) {
+            ... on User {
+              name
+            }
+          }
+        }
+      `);
+      operationLoader = {
+        get: jest.fn(() => getRequest(InnerQuery)),
+        load: jest.fn(() => Promise.resolve(getRequest(InnerQuery))),
+      };
+    });
+    afterEach(() => {
+      RelayFeatureFlags.ENABLE_REACT_FLIGHT_COMPONENT_FIELD = false;
+    });
+
+    it('marks references when Flight fields are fetched', () => {
+      const data = {
+        '1': {
+          __id: '1',
+          __typename: 'Story',
+          'flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+            {
+              __ref:
+                'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            },
+          id: '1',
+        },
+        '2': {
+          __id: '2',
+          __typename: 'User',
+          id: '2',
+          name: 'Lauren',
+        },
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+          {
+            __id: 'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            __typename: 'ReactFlightComponent',
+            executableDefinitions: [
+              {
+                module: {
+                  __dr: 'RelayFlightExampleQuery.graphql',
+                },
+                variables: {
+                  id: '2',
+                },
+              },
+            ],
+            tree: {
+              readRoot,
+            },
+          },
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {
+            __ref: '1',
+          },
+          'node(id:"2")': {
+            __ref: '2',
+          },
+        },
+      };
+      const recordSource = RelayRecordSource.create(data);
+      const references = new Set();
+      mark(
+        recordSource,
+        createNormalizationSelector(FlightQuery.operation, 'client:root', {
+          count: 10,
+          id: '1',
+        }),
+        references,
+        operationLoader,
+      );
+      expect(Array.from(references).sort()).toEqual([
+        '1',
+        '2',
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+        'client:root',
+      ]);
+    });
+
+    it('marks references when the Flight field exists but has not been processed', () => {
+      const data = {
+        '1': {
+          __id: '1',
+          __typename: 'Story',
+          'flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+            {
+              __ref:
+                'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            },
+          id: '1',
+        },
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+          {
+            __id: 'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            __typename: 'ReactFlightComponent',
+          },
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {
+            __ref: '1',
+          },
+        },
+      };
+      const recordSource = RelayRecordSource.create(data);
+      const references = new Set();
+      mark(
+        recordSource,
+        createNormalizationSelector(FlightQuery.operation, 'client:root', {
+          count: 10,
+          id: '1',
+        }),
+        references,
+        operationLoader,
+      );
+      expect(Array.from(references).sort()).toEqual([
+        '1',
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+        'client:root',
+      ]);
+    });
+
+    it('marks references when the Flight field is null', () => {
+      const data = {
+        '1': {
+          __id: '1',
+          __typename: 'Story',
+          'flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+            {
+              __ref:
+                'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            },
+          id: '1',
+        },
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+          null,
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {
+            __ref: '1',
+          },
+        },
+      };
+      const recordSource = RelayRecordSource.create(data);
+      const references = new Set();
+      mark(
+        recordSource,
+        createNormalizationSelector(FlightQuery.operation, 'client:root', {
+          count: 10,
+          id: '1',
+        }),
+        references,
+        operationLoader,
+      );
+      expect(Array.from(references).sort()).toEqual([
+        '1',
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+        'client:root',
+      ]);
+    });
+
+    it('marks references when the Flight field is undefined', () => {
+      const data = {
+        '1': {
+          __id: '1',
+          __typename: 'Story',
+          'flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+            {
+              __ref:
+                'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            },
+          id: '1',
+        },
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+          undefined,
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {
+            __ref: '1',
+          },
+        },
+      };
+      const recordSource = RelayRecordSource.create(data);
+      const references = new Set();
+      mark(
+        recordSource,
+        createNormalizationSelector(FlightQuery.operation, 'client:root', {
+          count: 10,
+          id: '1',
+        }),
+        references,
+        operationLoader,
+      );
+      expect(Array.from(references).sort()).toEqual([
+        '1',
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+        'client:root',
+      ]);
+    });
+
+    it('marks references when the linked ReactFlightClientResponseRecord is missing', () => {
+      const data = {
+        '1': {
+          __id: '1',
+          __typename: 'Story',
+          'flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})':
+            {
+              __ref:
+                'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+            },
+          id: '1',
+        },
+        'client:root': {
+          __id: 'client:root',
+          __typename: '__Root',
+          'node(id:"1")': {
+            __ref: '1',
+          },
+        },
+      };
+      const recordSource = RelayRecordSource.create(data);
+      const references = new Set();
+      mark(
+        recordSource,
+        createNormalizationSelector(FlightQuery.operation, 'client:root', {
+          count: 10,
+          id: '1',
+        }),
+        references,
+        operationLoader,
+      );
+      expect(Array.from(references).sort()).toEqual([
+        '1',
+        'client:1:flight(component:"FlightComponent.server",props:{"condition":true,"count":10,"id":"1"})',
+        'client:root',
+      ]);
     });
   });
 });

@@ -8,30 +8,31 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const RelayModernRecord = require('../store/RelayModernRecord');
-const RelayRecordProxy = require('./RelayRecordProxy');
-const RelayRecordSourceSelectorProxy = require('./RelayRecordSourceSelectorProxy');
-
-const invariant = require('invariant');
-const normalizeRelayPayload = require('../store/normalizeRelayPayload');
-
-const {EXISTENT, NONEXISTENT} = require('../store/RelayRecordState');
-const {ROOT_ID, ROOT_TYPE} = require('../store/RelayStoreUtils');
-
 import type {HandlerProvider} from '../handlers/RelayDefaultHandlerProvider';
+import type {GraphQLTaggedNode} from '../query/GraphQLTag';
 import type {GetDataID} from '../store/RelayResponseNormalizer';
 import type {
+  DataIDSet,
   HandleFieldPayload,
-  RecordSource,
   RecordProxy,
+  RecordSource,
   RecordSourceProxy,
-  RecordSourceSelectorProxy,
-  OperationDescriptor,
 } from '../store/RelayStoreTypes';
-import type {DataID} from '../util/RelayRuntimeTypes';
+import type {DataID, OperationType} from '../util/RelayRuntimeTypes';
 import type RelayRecordSourceMutator from './RelayRecordSourceMutator';
+
+const RelayModernRecord = require('../store/RelayModernRecord');
+const {EXISTENT, NONEXISTENT} = require('../store/RelayRecordState');
+const {ROOT_ID, ROOT_TYPE} = require('../store/RelayStoreUtils');
+const {
+  readUpdatableQuery_EXPERIMENTAL,
+} = require('./readUpdatableQuery_EXPERIMENTAL');
+const RelayRecordProxy = require('./RelayRecordProxy');
+const invariant = require('invariant');
 
 /**
  * @internal
@@ -41,8 +42,10 @@ import type RelayRecordSourceMutator from './RelayRecordSourceMutator';
 class RelayRecordSourceProxy implements RecordSourceProxy {
   _handlerProvider: ?HandlerProvider;
   __mutator: RelayRecordSourceMutator;
-  _proxies: {[dataID: DataID]: ?RelayRecordProxy};
+  _proxies: {[dataID: DataID]: ?RelayRecordProxy, ...};
   _getDataID: GetDataID;
+  _invalidatedStore: boolean;
+  _idsMarkedForInvalidation: DataIDSet;
 
   constructor(
     mutator: RelayRecordSourceMutator,
@@ -53,6 +56,8 @@ class RelayRecordSourceProxy implements RecordSourceProxy {
     this._handlerProvider = handlerProvider || null;
     this._proxies = {};
     this._getDataID = getDataID;
+    this._invalidatedStore = false;
+    this._idsMarkedForInvalidation = new Set();
   }
 
   publishSource(
@@ -87,31 +92,6 @@ class RelayRecordSourceProxy implements RecordSourceProxy {
         handler.update(this, fieldPayload);
       });
     }
-  }
-
-  commitPayload(
-    operation: OperationDescriptor,
-    response: ?Object,
-  ): RecordSourceSelectorProxy {
-    if (!response) {
-      return new RelayRecordSourceSelectorProxy(
-        this.__mutator,
-        this,
-        operation.fragment,
-      );
-    }
-    const {source, fieldPayloads} = normalizeRelayPayload(
-      operation.root,
-      response,
-      null,
-      {getDataID: this._getDataID, request: operation.request},
-    );
-    this.publishSource(source, fieldPayloads);
-    return new RelayRecordSourceSelectorProxy(
-      this.__mutator,
-      this,
-      operation.fragment,
-    );
   }
 
   create(dataID: DataID, typeName: string): RecordProxy {
@@ -159,9 +139,35 @@ class RelayRecordSourceProxy implements RecordSourceProxy {
     invariant(
       root && root.getType() === ROOT_TYPE,
       'RelayRecordSourceProxy#getRoot(): Expected the source to contain a ' +
-        'root record.',
+        'root record, %s.',
+      root == null
+        ? 'no root record found'
+        : `found a root record of type \`${root.getType()}\``,
     );
     return root;
+  }
+
+  invalidateStore(): void {
+    this._invalidatedStore = true;
+  }
+
+  isStoreMarkedForInvalidation(): boolean {
+    return this._invalidatedStore;
+  }
+
+  markIDForInvalidation(dataID: DataID): void {
+    this._idsMarkedForInvalidation.add(dataID);
+  }
+
+  getIDsMarkedForInvalidation(): DataIDSet {
+    return this._idsMarkedForInvalidation;
+  }
+
+  readUpdatableQuery_EXPERIMENTAL<TQuery: OperationType>(
+    query: GraphQLTaggedNode,
+    variables: TQuery['variables'],
+  ): TQuery['response'] {
+    return readUpdatableQuery_EXPERIMENTAL(query, variables, this);
   }
 }
 

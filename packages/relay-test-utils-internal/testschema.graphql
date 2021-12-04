@@ -19,7 +19,22 @@ directive @stream(
   label: String!
   initial_count: Int!
   if: Boolean = true
+  use_customized_batch: Boolean = false
 ) on FIELD
+
+directive @fetchable(field_name: String!) on OBJECT
+
+directive @relay_client_component_server(module_id: String!) on FRAGMENT_SPREAD
+
+directive @fb_actor_change on FIELD
+
+directive @live_query(
+  enabled: Boolean = true
+  polling_interval: Int
+  config_id: String
+  partial: Boolean
+  event_stream: String
+) on QUERY
 
 type Query {
   checkinSearchQuery(query: CheckinSearchInput): CheckinSearchResult
@@ -41,14 +56,25 @@ type Query {
   usernames(names: [String!]!): [Actor]
   viewer: Viewer
   _mutation: Mutation
-  relay_early_flush: [JSDependency!]!
+  fetch__User(id: ID!): User
+  fetch__NonNodeStory(input_fetch_id: ID!): NonNodeStory
+  nonNodeStory(id: ID!): NonNodeStory
+  userOrPage(id: ID!): UserOrPage
 }
+
+union UserOrPage = User | Page
 
 interface MaybeNodeInterface {
   name: String
 }
 
+scalar JSON
+
 union MaybeNode = Story | FakeNode | NonNode
+
+interface AllConcreteTypesImplementNode {
+  count: Int
+}
 
 type FakeNode {
   id: ID!
@@ -91,8 +117,13 @@ type Mutation {
     input: ApplicationRequestDeleteAllInput
   ): ApplicationRequestDeleteAllResponsePayload
   commentCreate(input: CommentCreateInput): CommentCreateResponsePayload
+  commentsCreate(input: CommentsCreateInput): CommentsCreateResponsePayload
   commentDelete(input: CommentDeleteInput): CommentDeleteResponsePayload
+  commentsDelete(input: CommentsDeleteInput): CommentsDeleteResponsePayload
   feedbackLike(input: FeedbackLikeInput): FeedbackLikeResponsePayload
+  feedbackLikeStrict(
+    input: FeedbackLikeInputStrict!
+  ): FeedbackLikeResponsePayload
   feedbackLikeSubscribe(input: FeedbackLikeInput): FeedbackLikeResponsePayload
   nodeSavedState(input: NodeSaveStateInput): NodeSavedStateResponsePayload
   unfriend(input: UnfriendInput): UnfriendResponsePayload
@@ -100,6 +131,7 @@ type Mutation {
     input: UpdateAllSeenStateInput
   ): ViewerNotificationsUpdateAllSeenStateResponsePayload
   setLocation(input: LocationInput): setLocationResponsePayload
+  storyUpdate(input: StoryUpdateInput): StoryUpdateResponsePayload
 }
 
 type Subscription {
@@ -107,6 +139,7 @@ type Subscription {
   commentCreateSubscribe(
     input: CommentCreateSubscriptionInput
   ): CommentCreateResponsePayload
+  configCreateSubscribe: ConfigCreateSubscriptResponsePayload
 }
 
 input ActorSubscribeInput {
@@ -130,6 +163,12 @@ input CommentCreateInput {
   feedback: CommentfeedbackFeedback
 }
 
+input CommentsCreateInput {
+  clientMutationId: String
+  feedbackId: ID
+  feedback: [CommentfeedbackFeedback]
+}
+
 input CommentfeedbackFeedback {
   comment: FeedbackcommentComment
 }
@@ -149,9 +188,21 @@ input CommentDeleteInput {
   commentId: ID
 }
 
+input CommentsDeleteInput {
+  clientMutationId: String
+  commentIds: [ID]
+}
+
 input FeedbackLikeInput {
   clientMutationId: String
   feedbackId: ID
+}
+
+input FeedbackLikeInputStrict {
+  userID: ID!
+  clientMutationId: ID!
+  feedbackId: ID!
+  description: String
 }
 
 input NodeSaveStateInput {
@@ -196,6 +247,11 @@ type CheckinSearchResult {
 input CheckinSearchInput {
   query: String
   inputs: [CheckinSearchInput]
+}
+
+input StoryUpdateInput {
+  clientMutationId: String
+  body: InputText
 }
 
 type PlainCommentBody {
@@ -252,7 +308,8 @@ type Comment implements Node {
   message: Text
   name: String
   profilePicture(size: [Int], preset: PhotoSize): Image
-  # This is added in RelayTestSchema
+  # This is added in TestSchema.js
+  #
   # profilePicture2(
   #   size: [Int],
   #   preset: PhotoSize,
@@ -272,6 +329,10 @@ type Comment implements Node {
   viewerSavedState: String
 }
 
+type ConfigCreateSubscriptResponsePayload {
+  config: Config
+}
+
 type CommentCreateResponsePayload {
   clientMutationId: String
   comment: Comment
@@ -280,10 +341,29 @@ type CommentCreateResponsePayload {
   viewer: Viewer
 }
 
+type CommentsCreateResponsePayload {
+  clientMutationId: String
+  comments: [Comment]
+  feedback: [Feedback]
+  feedbackCommentEdges: [CommentsEdge]
+  viewer: Viewer
+}
+
 type CommentDeleteResponsePayload {
   clientMutationId: String
   deletedCommentId: ID
   feedback: Feedback
+}
+
+type CommentsDeleteResponsePayload {
+  clientMutationId: String
+  deletedCommentIds: [ID]
+  feedback: Feedback
+}
+
+type StoryUpdateResponsePayload {
+  clientMutationId: String
+  story: Story
 }
 
 type CommentsConnection {
@@ -330,7 +410,8 @@ type Date {
   year: Int
 }
 
-type Feedback implements Node {
+type Feedback implements Node & HasJsField {
+  js(module: String!, id: String): JSDependency
   actor: Actor
   actors: [Actor]
   actorCount: Int
@@ -409,6 +490,7 @@ interface FeedUnit {
   id: ID!
   message: Text
   tracking: String
+  actor_key: ID!
 }
 
 type FriendsConnection {
@@ -427,6 +509,7 @@ type Image {
   uri: String
   width: Int
   height: Int
+  test_enums: TestEnums
 }
 
 type LikersOfContentConnection {
@@ -442,6 +525,10 @@ type LikersEdge {
 
 interface Named {
   name: String
+}
+
+interface Entity {
+  url(relative: Boolean, site: String): String
 }
 
 type SimpleNamed implements Named {
@@ -546,13 +633,14 @@ interface Actor {
   url(relative: Boolean, site: String): String
   websites: [String]
   username: String
+  actor_key: ID!
 }
 
 type NodeSavedStateResponsePayload {
   node: Node
 }
 
-type Page implements Node & Actor {
+type Page implements Node & Actor & Entity {
   actor: Actor
   actors: [Actor]
   actorCount: Int
@@ -608,6 +696,8 @@ type Page implements Node & Actor {
   username: String
   viewerSavedState: String
   nameWithArgs(capitalize: Boolean!): String
+  nameWithDefaultArgs(capitalize: Boolean! = false): String
+  actor_key: ID!
 }
 
 type PageInfo {
@@ -655,13 +745,22 @@ type SegmentsEdge {
   node: String
 }
 
-type NonNodeStory implements FeedUnit {
+type NonNodeStory implements FeedUnit @fetchable(field_name: "fetch_id") {
   actor: Actor
   actorCount: Int
   feedback: Feedback
   id: ID!
+  fetch_id: ID!
   message: Text
   tracking: String
+  comments(
+    after: ID
+    before: ID
+    first: Int
+    last: Int
+    orderby: String
+  ): CommentsConnection
+  actor_key: ID!
 }
 
 type PhotoStory implements FeedUnit & Node {
@@ -725,6 +824,7 @@ type PhotoStory implements FeedUnit & Node {
   websites: [String]
   username: String
   viewerSavedState: String
+  actor_key: ID!
 }
 
 type Story implements FeedUnit & Node & MaybeNodeInterface {
@@ -787,6 +887,8 @@ type Story implements FeedUnit & Node & MaybeNodeInterface {
   websites: [String]
   username: String
   viewerSavedState: String
+  flight(component: String, props: ReactFlightProps): ReactFlightComponent
+  actor_key: ID!
 }
 
 type StoryAttachment {
@@ -815,6 +917,11 @@ type SubscribersEdge {
 }
 
 type Text {
+  text: String
+  ranges: [String]
+}
+
+input InputText {
   text: String
   ranges: [String]
 }
@@ -875,6 +982,12 @@ type MarkdownUserNameData {
 
 type CustomNameRenderer {
   customField: String
+  user: User
+}
+
+type PlainUserRenderer {
+  user: User
+  js(module: String!, id: String): JSDependency
 }
 
 union UserNameRenderer =
@@ -886,7 +999,11 @@ interface UserNameRenderable {
   name: String
 }
 
-type User implements Named & Node & Actor & HasJsField {
+input ProfilePictureOptions {
+  newName: String
+}
+
+type User implements Named & Node & Actor & HasJsField & Entity & AllConcreteTypesImplementNode {
   actor: Actor
   actors: [Actor]
   actorCount: Int
@@ -933,7 +1050,9 @@ type User implements Named & Node & Actor & HasJsField {
   likeSentence: Text
   message: Text
   name: String
+  alternate_name: String
   nameRenderable(supported: [String!]): UserNameRenderable
+  nameRendererNoSupportedArg: UserNameRenderer
   nameRenderer(supported: [String!]): UserNameRenderer
   nameRendererForContext(
     context: NameRendererContext
@@ -955,6 +1074,19 @@ type User implements Named & Node & Actor & HasJsField {
   websites: [String]
   username: String
   viewerSavedState: String
+  plainUserRenderer: PlainUserRenderer
+  profilePicture2(
+    size: [Int]
+    preset: PhotoSize
+    cropPosition: CropPosition
+    fileExtension: FileExtension
+    additionalParameters: JSON
+    options: ProfilePictureOptions
+  ): Image
+  neighbors: [User!]
+  nearest_neighbor: User!
+  parents: [User!]!
+  actor_key: ID!
 }
 
 enum NameRendererContext {
@@ -986,6 +1118,7 @@ input ItemFilterInput {
 type Viewer {
   configs(named: [String]): ConfigsConnection
   actor: Actor
+  account_user: User
   allTimezones: [TimezoneInfo]
   isFbEmployee: Boolean
   newsFeed(after: ID, first: Int, find: ID): NewsFeedConnection
@@ -1052,22 +1185,64 @@ enum TopLevelCommentsOrdering {
   toplevel
 }
 
-# This is added in RelayTestSchema
-# enum CropPosition {
-#   TOP
-#   CENTER
-#   BOTTOM
-#   LEFT
-#   RIGHT
-# }
-#
-# enum FileExtension {
-#   JPG
-#   PNG
-# }
+enum CropPosition {
+  TOP
+  CENTER
+  BOTTOM
+  LEFT
+  RIGHT
+}
+
+enum FileExtension {
+  JPG
+  PNG
+}
+
+enum TestEnums {
+  mark
+  zuck
+}
 
 type Settings {
   cache_id: ID
   notificationSounds: Boolean
   notifications(environment: Environment): Boolean
 }
+
+type IDFieldTests {
+  id_non_null: IDFieldIsIDNonNull
+  id: IDFieldIsID
+  list_of_id: IDFieldIsListOfID
+  string_non_null: IDFieldIsStringNonNull
+  string: IDFieldIsString
+  int_non_null: IDFieldIsIntNonNull
+  int: IDFieldIsInt
+  object: IDFieldIsObject
+}
+type IDFieldIsIDNonNull {
+  id: ID!
+}
+type IDFieldIsID {
+  id: ID
+}
+type IDFieldIsListOfID {
+  id: [ID]
+}
+type IDFieldIsStringNonNull {
+  id: String!
+}
+type IDFieldIsString {
+  id: String
+}
+type IDFieldIsIntNonNull {
+  id: Int!
+}
+type IDFieldIsInt {
+  id: Int
+}
+type IDFieldIsObject {
+  id: Node
+}
+
+scalar ReactFlightComponent
+scalar ReactFlightProps

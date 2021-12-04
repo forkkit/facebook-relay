@@ -9,19 +9,23 @@
  * @emails oncall+relay
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const RelayModernEnvironment = require('../RelayModernEnvironment');
-const RelayModernStore = require('../RelayModernStore');
 const RelayNetwork = require('../../network/RelayNetwork');
-const RelayRecordSource = require('../RelayRecordSource');
-
+const {getRequest, graphql} = require('../../query/GraphQLTag');
+const RelayModernEnvironment = require('../RelayModernEnvironment');
 const {
   createOperationDescriptor,
 } = require('../RelayModernOperationDescriptor');
 const {createReaderSelector} = require('../RelayModernSelector');
+const RelayModernStore = require('../RelayModernStore');
+const RelayRecordSource = require('../RelayRecordSource');
 const {ROOT_ID} = require('../RelayStoreUtils');
-const {generateAndCompile} = require('relay-test-utils-internal');
+const {disallowWarnings} = require('relay-test-utils-internal');
+
+disallowWarnings();
 
 describe('execute() with Promise network', () => {
   let callbacks;
@@ -38,18 +42,18 @@ describe('execute() with Promise network', () => {
   let variables;
 
   beforeEach(() => {
-    jest.resetModules();
-
-    ({ActorQuery: query} = generateAndCompile(`
-        query ActorQuery($fetchSize: Boolean!) {
-          me {
-            name
-            profilePicture(size: 42) @include(if: $fetchSize) {
-              uri
-            }
+    query = getRequest(graphql`
+      query RelayModernEnvironmentExecuteWithPromiseNetworkTestActorQuery(
+        $fetchSize: Boolean!
+      ) {
+        me {
+          name
+          profilePicture(size: 42) @include(if: $fetchSize) {
+            uri
           }
         }
-      `));
+      }
+    `);
     variables = {fetchSize: false};
     operation = createOperationDescriptor(query, {
       ...variables,
@@ -84,7 +88,15 @@ describe('execute() with Promise network', () => {
 
   it('fetches queries with force:true', () => {
     const cacheConfig = {force: true};
-    environment.execute({cacheConfig, operation}).subscribe(callbacks);
+    operation = createOperationDescriptor(
+      query,
+      {
+        ...variables,
+        foo: 'bar', // should be filtered from network fetch
+      },
+      cacheConfig,
+    );
+    environment.execute({operation}).subscribe(callbacks);
     expect(fetch.mock.calls.length).toBe(1);
     expect(fetch.mock.calls[0][0]).toEqual(query.params);
     expect(fetch.mock.calls[0][1]).toEqual({fetchSize: false});

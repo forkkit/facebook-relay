@@ -9,21 +9,33 @@
  * @emails oncall+relay
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const RelayModernEnvironment = require('../RelayModernEnvironment');
-const RelayModernStore = require('../RelayModernStore');
+'use strict';
+import type {
+  Variables,
+  CacheConfig,
+} from 'relay-runtime/util/RelayRuntimeTypes';
+import type {RequestParameters} from 'relay-runtime/util/RelayConcreteNode';
+import type {
+  RecordSourceProxy,
+  HandleFieldPayload,
+} from 'relay-runtime/store/RelayStoreTypes';
+
 const RelayNetwork = require('../../network/RelayNetwork');
 const RelayObservable = require('../../network/RelayObservable');
-const RelayRecordSource = require('../RelayRecordSource');
-
-const warning = require('warning');
-
+const {getFragment, getRequest, graphql} = require('../../query/GraphQLTag');
+const RelayFeatureFlags = require('../../util/RelayFeatureFlags');
+const RelayModernEnvironment = require('../RelayModernEnvironment');
 const {
   createOperationDescriptor,
 } = require('../RelayModernOperationDescriptor');
 const {createReaderSelector} = require('../RelayModernSelector');
-const {generateAndCompile} = require('relay-test-utils-internal');
+const RelayModernStore = require('../RelayModernStore');
+const RelayRecordSource = require('../RelayRecordSource');
+const {disallowWarnings, expectToWarn} = require('relay-test-utils-internal');
+
+disallowWarnings();
 
 describe('execute() a query with @stream', () => {
   let actorFragment;
@@ -44,39 +56,38 @@ describe('execute() a query with @stream', () => {
   let variables;
 
   beforeEach(() => {
-    jest.resetModules();
-    jest.mock('warning');
-    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-    ({
-      FeedbackQuery: query,
-      FeedbackFragment: fragment,
-      ActorFragment: actorFragment,
-    } = generateAndCompile(`
-        query FeedbackQuery($id: ID!, $enableStream: Boolean!) {
-          node(id: $id) {
-            ...FeedbackFragment
-          }
+    query = getRequest(graphql`
+      query RelayModernEnvironmentExecuteWithStreamTestFeedbackQuery(
+        $id: ID!
+        $enableStream: Boolean!
+      ) {
+        node(id: $id) {
+          ...RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment
         }
+      }
+    `);
 
-        fragment FeedbackFragment on Feedback {
-          id
-          actors @stream(label: "actors", if: $enableStream, initial_count: 0) {
-            name @__clientField(handle: "name_handler")
-          }
-        }
-
-        # keep in sync with above
-        fragment ActorFragment on Actor {
+    fragment = getFragment(graphql`
+      fragment RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment on Feedback {
+        id
+        actors @stream(label: "actors", if: $enableStream, initial_count: 0) {
           name @__clientField(handle: "name_handler")
         }
-      `));
+      }
+    `);
+
+    actorFragment = getFragment(graphql`
+      fragment RelayModernEnvironmentExecuteWithStreamTestActorFragment on User {
+        # keep in sync with above
+        name @__clientField(handle: "name_handler")
+      }
+    `);
     variables = {id: '1', enableStream: true};
     operation = createOperationDescriptor(query, variables);
     selector = createReaderSelector(fragment, '1', {}, operation.request);
 
     NameHandler = {
-      update(storeProxy, payload) {
+      update(storeProxy: RecordSourceProxy, payload: HandleFieldPayload) {
         const record = storeProxy.get(payload.dataID);
         if (record != null) {
           const markup = record.getValue(payload.fieldKey);
@@ -88,10 +99,15 @@ describe('execute() a query with @stream', () => {
       },
     };
 
-    function getDataID(data, typename) {
+    function getDataID(
+      data: interface {[string]: mixed},
+      typename: string | $TEMPORARY$string<'MessagingParticipant'>,
+    ) {
       if (typename === 'MessagingParticipant') {
+        // $FlowFixMe[prop-missing]
         return `${typename}:${String(data.id)}`;
       }
+      // $FlowFixMe[prop-missing]
       return data.id;
     }
 
@@ -99,7 +115,11 @@ describe('execute() a query with @stream', () => {
     error = jest.fn();
     next = jest.fn();
     callbacks = {complete, error, next};
-    fetch = (_query, _variables, _cacheConfig) => {
+    fetch = (
+      _query: RequestParameters,
+      _variables: Variables,
+      _cacheConfig: CacheConfig,
+    ) => {
       return RelayObservable.create(sink => {
         dataSource = sink;
       });
@@ -107,7 +127,7 @@ describe('execute() a query with @stream', () => {
     source = RelayRecordSource.create();
     store = new RelayModernStore(source);
     environment = new RelayModernEnvironment({
-      UNSTABLE_DO_NOT_USE_getDataID: getDataID,
+      getDataID: getDataID,
       network: RelayNetwork.create(fetch),
       store,
       handlerProvider: name => {
@@ -174,7 +194,8 @@ describe('execute() a query with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
     expect(next).toBeCalledTimes(1);
@@ -192,7 +213,8 @@ describe('execute() a query with @stream', () => {
         id: '3',
         name: 'Bob',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 1],
     });
     expect(next).toBeCalledTimes(2);
@@ -208,14 +230,288 @@ describe('execute() a query with @stream', () => {
     expect(error).toBeCalledTimes(0);
   });
 
+  it('processes streamed payloads mixed with extensions-only payloads', () => {
+    const initialSnapshot = environment.lookup(selector);
+    const callback = jest.fn();
+    environment.subscribe(initialSnapshot, callback);
+
+    environment.execute({operation}).subscribe(callbacks);
+    dataSource.next({
+      data: {
+        node: {
+          __typename: 'Feedback',
+          id: '1',
+          actors: [],
+        },
+      },
+    });
+    jest.runAllTimers();
+    next.mockClear();
+    callback.mockClear();
+
+    const extensionsPayload = {data: null, extensions: {foo: 'foo'}};
+    dataSource.next(extensionsPayload);
+    expect(next).toBeCalledTimes(1);
+    expect(next.mock.calls[0][0]).toBe(extensionsPayload);
+    expect(callback).toBeCalledTimes(0);
+    next.mockClear();
+
+    dataSource.next({
+      data: {
+        __typename: 'User',
+        id: '2',
+        name: 'Alice',
+      },
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+      path: ['node', 'actors', 0],
+    });
+    expect(next).toBeCalledTimes(1);
+    expect(callback).toBeCalledTimes(1);
+    const snapshot = callback.mock.calls[0][0];
+    expect(snapshot.isMissingData).toBe(false);
+    expect(snapshot.data).toEqual({
+      id: '1',
+      actors: [{name: 'ALICE'}],
+    });
+
+    expect(complete).toBeCalledTimes(0);
+    expect(error).toBeCalledTimes(0);
+  });
+
+  it('processes batched streamed payloads (with use_customized_batch)', () => {
+    const initialSnapshot = environment.lookup(selector);
+    const callback = jest.fn();
+    environment.subscribe(initialSnapshot, callback);
+
+    environment.execute({operation}).subscribe(callbacks);
+    dataSource.next({
+      data: {
+        node: {
+          __typename: 'Feedback',
+          id: '1',
+          actors: [],
+        },
+      },
+    });
+    jest.runAllTimers();
+    next.mockClear();
+    callback.mockClear();
+    dataSource.next([
+      {
+        data: {
+          __typename: 'User',
+          id: '2',
+          name: 'Alice',
+        },
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+        path: ['node', 'actors', 0],
+      },
+      {
+        data: {
+          __typename: 'User',
+          id: '3',
+          name: 'Bob',
+        },
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+        path: ['node', 'actors', 1],
+      },
+    ]);
+    expect(next).toBeCalledTimes(1);
+    expect(callback).toBeCalledTimes(1);
+    const snapshot = callback.mock.calls[0][0];
+    expect(snapshot.isMissingData).toBe(false);
+    expect(snapshot.data).toEqual({
+      id: '1',
+      actors: [{name: 'ALICE'}, {name: 'BOB'}],
+    });
+    expect(complete).toBeCalledTimes(0);
+    expect(error).toBeCalledTimes(0);
+  });
+
+  it('process error payloads in batched steaming responses', () => {
+    const initialSnapshot = environment.lookup(selector);
+    const callback = jest.fn();
+    environment.subscribe(initialSnapshot, callback);
+
+    environment.execute({operation}).subscribe(callbacks);
+    dataSource.next({
+      data: {
+        node: {
+          __typename: 'Feedback',
+          id: '1',
+          actors: [],
+        },
+      },
+    });
+    jest.runAllTimers();
+    next.mockClear();
+    callback.mockClear();
+    dataSource.next([
+      {
+        data: {
+          __typename: 'User',
+          id: '2',
+          name: 'Alice',
+        },
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+        path: ['node', 'actors', 0],
+      },
+      {
+        errors: [
+          {
+            message: 'wtf',
+            locations: [],
+            severity: 'ERROR',
+          },
+        ],
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+        path: ['node', 'actors', 1],
+      },
+    ]);
+    // All batch will be discareded if there an error in the batch
+    expect(next).toBeCalledTimes(0);
+    expect(callback).toBeCalledTimes(0);
+
+    expect(complete).toBeCalledTimes(0);
+    expect(error).toBeCalledTimes(1);
+  });
+
+  it('process batched steaming responses with the mix of initial and incremental payloads', () => {
+    const initialSnapshot = environment.lookup(selector);
+    const callback = jest.fn();
+    environment.subscribe(initialSnapshot, callback);
+    environment.execute({operation}).subscribe(callbacks);
+    dataSource.next([
+      {
+        data: {
+          node: {
+            __typename: 'Feedback',
+            id: '1',
+            actors: [],
+          },
+        },
+      },
+      {
+        data: {
+          __typename: 'User',
+          id: '2',
+          name: 'Alice',
+        },
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+        path: ['node', 'actors', 0],
+      },
+    ]);
+    expect(next).toBeCalledTimes(1);
+    // Subscribe is called once per batch
+    expect(callback).toBeCalledTimes(1);
+    const snapshot = callback.mock.calls[0][0];
+    expect(snapshot.isMissingData).toBe(false);
+    expect(snapshot.data).toEqual({
+      id: '1',
+      actors: [{name: 'ALICE'}],
+    });
+    expect(complete).toBeCalledTimes(0);
+    expect(error).toBeCalledTimes(0);
+
+    jest.runAllTimers();
+    next.mockClear();
+    callback.mockClear();
+    dataSource.next([
+      {
+        data: {
+          __typename: 'User',
+          id: '3',
+          name: 'Bob',
+        },
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+        path: ['node', 'actors', 1],
+      },
+      {
+        data: {
+          __typename: 'User',
+          id: '4',
+          name: 'Clair',
+        },
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+        path: ['node', 'actors', 2],
+      },
+    ]);
+    expect(next).toBeCalledTimes(1);
+    expect(callback).toBeCalledTimes(1);
+    const snapshot2 = callback.mock.calls[0][0];
+    expect(snapshot2.isMissingData).toBe(false);
+    expect(snapshot2.data).toEqual({
+      id: '1',
+      actors: [{name: 'ALICE'}, {name: 'BOB'}, {name: 'CLAIR'}],
+    });
+    expect(complete).toBeCalledTimes(0);
+    expect(error).toBeCalledTimes(0);
+  });
+
+  it('process batched steaming responses with the batch that has final payload', () => {
+    const initialSnapshot = environment.lookup(selector);
+    const callback = jest.fn();
+    environment.subscribe(initialSnapshot, callback);
+    environment.execute({operation}).subscribe(callbacks);
+    expectToWarn(
+      'RelayModernEnvironment: Operation `RelayModernEnvironmentExecuteWithStreamTestFeedbackQuery` contains @defer/@stream ' +
+        'directives but was executed in non-streaming mode. See ' +
+        'https://fburl.com/relay-incremental-delivery-non-streaming-warning.',
+      () => {
+        dataSource.next([
+          {
+            data: {
+              node: {
+                __typename: 'Feedback',
+                id: '1',
+                actors: [],
+              },
+            },
+            extensions: {
+              is_final: true,
+            },
+          },
+          {
+            data: {
+              __typename: 'User',
+              id: '2',
+              name: 'Alice',
+            },
+            label:
+              'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+            path: ['node', 'actors', 0],
+          },
+        ]);
+      },
+    );
+    expect(next).toBeCalledTimes(1);
+    expect(callback).toBeCalledTimes(1);
+    const snapshot = callback.mock.calls[0][0];
+    expect(snapshot.isMissingData).toBe(false);
+    expect(snapshot.data).toEqual({
+      id: '1',
+      actors: [{name: 'ALICE'}],
+    });
+    expect(complete).toBeCalledTimes(0);
+    expect(error).toBeCalledTimes(0);
+  });
+
   it('processes streamed payloads with scheduling', () => {
     let taskID = 0;
     const tasks = new Map();
     const scheduler = {
-      cancel: id => {
+      cancel: (id: string) => {
         tasks.delete(id);
       },
-      schedule: task => {
+      schedule: (task: () => void) => {
         const id = String(taskID++);
         tasks.set(id, task);
         return id;
@@ -267,7 +563,8 @@ describe('execute() a query with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
     expect(next).toBeCalledTimes(0);
@@ -288,7 +585,8 @@ describe('execute() a query with @stream', () => {
         id: '3',
         name: 'Bob',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 1],
     });
     expect(next).toBeCalledTimes(1);
@@ -311,10 +609,10 @@ describe('execute() a query with @stream', () => {
     let taskID = 0;
     const tasks = new Map();
     const scheduler = {
-      cancel: id => {
+      cancel: (id: string) => {
         tasks.delete(id);
       },
-      schedule: task => {
+      schedule: (task: () => void) => {
         const id = String(taskID++);
         tasks.set(id, task);
         return id;
@@ -366,7 +664,8 @@ describe('execute() a query with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
     expect(next).toBeCalledTimes(0);
@@ -411,7 +710,8 @@ describe('execute() a query with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
     expect(next).toBeCalledTimes(1);
@@ -470,7 +770,8 @@ describe('execute() a query with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
     expect(next).toBeCalledTimes(1);
@@ -536,7 +837,8 @@ describe('execute() a query with @stream', () => {
           id: '2',
           name: 'Alice',
         },
-        label: 'FeedbackFragment$stream$actors',
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
         path: ['node', 'actors', 0],
       });
       expect(next).toBeCalledTimes(1);
@@ -585,7 +887,8 @@ describe('execute() a query with @stream', () => {
           id: '2',
           name: 'Alice',
         },
-        label: 'FeedbackFragment$stream$actors',
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
         path: ['node', 'actors', 0],
       });
       expect(next).toBeCalledTimes(1);
@@ -623,7 +926,8 @@ describe('execute() a query with @stream', () => {
           id: '3',
           name: 'Bob',
         },
-        label: 'FeedbackFragment$stream$actors',
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
         path: ['node', 'actors', 1],
       });
       expect(next).toBeCalledTimes(2);
@@ -671,7 +975,8 @@ describe('execute() a query with @stream', () => {
         id: '3',
         name: 'Bob',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 1],
     });
     expect(next).toBeCalledTimes(1);
@@ -690,7 +995,8 @@ describe('execute() a query with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
     expect(next).toBeCalledTimes(2);
@@ -746,7 +1052,8 @@ describe('execute() a query with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
     expect(next).toBeCalledTimes(1);
@@ -790,7 +1097,8 @@ describe('execute() a query with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
 
@@ -837,6 +1145,42 @@ describe('execute() a query with @stream', () => {
     expect(callback).toBeCalledTimes(1);
   });
 
+  it('calls next() with extensions-only payloads', () => {
+    const initialSnapshot = environment.lookup(selector);
+    const callback = jest.fn();
+    environment.subscribe(initialSnapshot, callback);
+
+    environment.execute({operation}).subscribe(callbacks);
+    dataSource.next({
+      data: {
+        node: {
+          __typename: 'Feedback',
+          id: '1',
+          actors: [],
+        },
+      },
+    });
+    jest.runAllTimers();
+
+    expect(complete).toBeCalledTimes(0);
+    expect(error).toBeCalledTimes(0);
+    expect(next).toBeCalledTimes(1);
+    expect(callback).toBeCalledTimes(1);
+    next.mockClear();
+
+    const payload = {
+      data: null,
+      extensions: {},
+    };
+    dataSource.next(payload);
+
+    expect(complete).toBeCalledTimes(0);
+    expect(error).toBeCalledTimes(0);
+    expect(next).toBeCalledTimes(1);
+    expect(next).toBeCalledWith(payload);
+    expect(callback).toBeCalledTimes(1);
+  });
+
   it('calls error() when server errors after streamed payload resolves', () => {
     const initialSnapshot = environment.lookup(selector);
     const callback = jest.fn();
@@ -860,7 +1204,8 @@ describe('execute() a query with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
 
@@ -941,17 +1286,80 @@ describe('execute() a query with @stream', () => {
           severity: 'ERROR',
         },
       ],
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
 
     expect(complete).toBeCalledTimes(0);
     expect(error).toBeCalledTimes(1);
     expect(error.mock.calls[0][0].message).toContain(
-      'No data returned for operation `FeedbackQuery`',
+      'No data returned for operation `RelayModernEnvironmentExecuteWithStreamTestFeedbackQuery`',
     );
     expect(next).toBeCalledTimes(1);
     expect(callback).toBeCalledTimes(1);
+  });
+
+  it('calls error() when streamed payload has error', () => {
+    const initialSnapshot = environment.lookup(selector);
+    const callback = jest.fn();
+    environment.subscribe(initialSnapshot, callback);
+
+    environment.execute({operation}).subscribe(callbacks);
+    dataSource.next({
+      data: {
+        node: {
+          __typename: 'Feedback',
+          id: '1',
+          actors: [],
+        },
+      },
+    });
+    jest.runAllTimers();
+
+    expect(complete).toBeCalledTimes(0);
+    expect(error).toBeCalledTimes(0);
+    expect(next).toBeCalledTimes(1);
+    expect(callback).toBeCalledTimes(1);
+
+    dataSource.next([
+      {
+        data: {
+          __typename: 'User',
+          id: '2',
+          name: 'Bob',
+        },
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+        path: ['node', 'actors', 1],
+      },
+      {
+        errors: [
+          {
+            message: 'wtf',
+            locations: [],
+            severity: 'ERROR',
+          },
+        ],
+        label:
+          'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
+        path: ['node', 'actors', 0],
+      },
+    ]);
+
+    expect(complete).toBeCalledTimes(0);
+    expect(error).toBeCalledTimes(1);
+    expect(error.mock.calls[0][0].message).toContain(
+      'No data returned for operation `RelayModernEnvironmentExecuteWithStreamTestFeedbackQuery`',
+    );
+    expect(next).toBeCalledTimes(1);
+    expect(callback).toBeCalledTimes(1);
+    const snapshot = callback.mock.calls[0][0];
+    expect(snapshot.isMissingData).toBe(false);
+    expect(snapshot.data).toEqual({
+      id: '1',
+      actors: [],
+    });
   });
 
   it('uses user-defined getDataID to generate ID from streamed payload.', () => {
@@ -979,7 +1387,8 @@ describe('execute() a query with @stream', () => {
         id: '2',
         name: 'Alice',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 0],
     });
 
@@ -999,7 +1408,8 @@ describe('execute() a query with @stream', () => {
         id: '3',
         name: 'Bob',
       },
-      label: 'FeedbackFragment$stream$actors',
+      label:
+        'RelayModernEnvironmentExecuteWithStreamTestFeedbackFragment$stream$actors',
       path: ['node', 'actors', 1],
     });
 
@@ -1036,7 +1446,14 @@ describe('execute() a query with @stream', () => {
         is_final: true,
       },
     };
-    dataSource.next(payload);
+    expectToWarn(
+      'RelayModernEnvironment: Operation `RelayModernEnvironmentExecuteWithStreamTestFeedbackQuery` contains @defer/@stream ' +
+        'directives but was executed in non-streaming mode. See ' +
+        'https://fburl.com/relay-incremental-delivery-non-streaming-warning.',
+      () => {
+        dataSource.next(payload);
+      },
+    );
     jest.runAllTimers();
 
     expect(next.mock.calls.length).toBe(1);
@@ -1049,12 +1466,5 @@ describe('execute() a query with @stream', () => {
       id: '1',
       actors: [],
     });
-    expect(warning).toHaveBeenCalledWith(
-      false,
-      'RelayModernEnvironment: Operation `%s` contains @defer/@stream ' +
-        'directives but was executed in non-streaming mode. See ' +
-        'https://fburl.com/relay-incremental-delivery-non-streaming-warning.',
-      'FeedbackQuery',
-    );
   });
 });

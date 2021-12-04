@@ -8,29 +8,33 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
-
-const areEqual = require('areEqual');
-const invariant = require('invariant');
-const warning = require('warning');
-
-const {getFragmentVariables} = require('./RelayConcreteVariables');
-const {
-  FRAGMENT_OWNER_KEY,
-  FRAGMENTS_KEY,
-  ID_KEY,
-} = require('./RelayStoreUtils');
 
 import type {NormalizationSelectableNode} from '../util/NormalizationNode';
 import type {ReaderFragment} from '../util/ReaderNode';
 import type {DataID, Variables} from '../util/RelayRuntimeTypes';
 import type {
+  ClientEdgeTraversalPath,
   NormalizationSelector,
   PluralReaderSelector,
   ReaderSelector,
   RequestDescriptor,
   SingularReaderSelector,
 } from './RelayStoreTypes';
+
+const {getFragmentVariables} = require('./RelayConcreteVariables');
+const {
+  CLIENT_EDGE_TRAVERSAL_PATH,
+  FRAGMENT_OWNER_KEY,
+  FRAGMENTS_KEY,
+  ID_KEY,
+  IS_WITHIN_UNMATCHED_TYPE_REFINEMENT,
+} = require('./RelayStoreUtils');
+const areEqual = require('areEqual');
+const invariant = require('invariant');
+const warning = require('warning');
 
 /**
  * @public
@@ -75,6 +79,9 @@ function getSingularSelector(
   const dataID = item[ID_KEY];
   const fragments = item[FRAGMENTS_KEY];
   const mixedOwner = item[FRAGMENT_OWNER_KEY];
+  const isWithinUnmatchedTypeRefinement =
+    item[IS_WITHIN_UNMATCHED_TYPE_REFINEMENT] === true;
+  const mixedClientEdgeTraversalPath = item[CLIENT_EDGE_TRAVERSAL_PATH];
   if (
     typeof dataID === 'string' &&
     typeof fragments === 'object' &&
@@ -82,17 +89,29 @@ function getSingularSelector(
     typeof fragments[fragment.name] === 'object' &&
     fragments[fragment.name] !== null &&
     typeof mixedOwner === 'object' &&
-    mixedOwner !== null
+    mixedOwner !== null &&
+    (mixedClientEdgeTraversalPath == null ||
+      Array.isArray(mixedClientEdgeTraversalPath))
   ) {
     const owner: RequestDescriptor = (mixedOwner: $FlowFixMe);
-    const argumentVariables = fragments[fragment.name];
+    const clientEdgeTraversalPath: ?ClientEdgeTraversalPath =
+      (mixedClientEdgeTraversalPath: $FlowFixMe);
 
+    const argumentVariables = fragments[fragment.name];
     const fragmentVariables = getFragmentVariables(
       fragment,
       owner.variables,
       argumentVariables,
     );
-    return createReaderSelector(fragment, dataID, fragmentVariables, owner);
+
+    return createReaderSelector(
+      fragment,
+      dataID,
+      fragmentVariables,
+      owner,
+      isWithinUnmatchedTypeRefinement,
+      clientEdgeTraversalPath,
+    );
   }
 
   if (__DEV__) {
@@ -185,9 +204,9 @@ function getSelector(
  * can read the results to pass to the inner component.
  */
 function getSelectorsFromObject(
-  fragments: {[key: string]: ReaderFragment},
-  object: {[key: string]: mixed},
-): {[key: string]: ?ReaderSelector} {
+  fragments: {[key: string]: ReaderFragment, ...},
+  object: {[key: string]: mixed, ...},
+): {[key: string]: ?ReaderSelector, ...} {
   const selectors = {};
   for (const key in fragments) {
     if (fragments.hasOwnProperty(key)) {
@@ -209,9 +228,9 @@ function getSelectorsFromObject(
  * determining the "identity" of the props passed to a component.
  */
 function getDataIDsFromObject(
-  fragments: {[key: string]: ReaderFragment},
-  object: {[key: string]: mixed},
-): {[key: string]: ?(DataID | Array<DataID>)} {
+  fragments: {[key: string]: ReaderFragment, ...},
+  object: {[key: string]: mixed, ...},
+): {[key: string]: ?(DataID | Array<DataID>), ...} {
   const ids = {};
   for (const key in fragments) {
     if (fragments.hasOwnProperty(key)) {
@@ -289,9 +308,11 @@ function getDataID(fragment: ReaderFragment, item: mixed): ?DataID {
     false,
     'RelayModernSelector: Expected object to contain data for fragment `%s`, got ' +
       '`%s`. Make sure that the parent operation/fragment included fragment ' +
-      '`...%s` without `@relay(mask: false)`.',
+      '`...%s` without `@relay(mask: false)`, or `null` is passed as the fragment ' +
+      "reference for `%s` if it's conditonally included and the condition isn't met.",
     fragment.name,
     JSON.stringify(item),
+    fragment.name,
     fragment.name,
   );
   return null;
@@ -308,8 +329,8 @@ function getDataID(fragment: ReaderFragment, item: mixed): ?DataID {
  * for a Relay container, for example.
  */
 function getVariablesFromObject(
-  fragments: {[key: string]: ReaderFragment},
-  object: {[key: string]: mixed},
+  fragments: {[key: string]: ReaderFragment, ...},
+  object: {[key: string]: mixed, ...},
 ): Variables {
   const variables = {};
   for (const key in fragments) {
@@ -405,10 +426,14 @@ function createReaderSelector(
   dataID: DataID,
   variables: Variables,
   request: RequestDescriptor,
+  isWithinUnmatchedTypeRefinement: boolean = false,
+  clientEdgeTraversalPath: ?ClientEdgeTraversalPath,
 ): SingularReaderSelector {
   return {
     kind: 'SingularReaderSelector',
     dataID,
+    isWithinUnmatchedTypeRefinement,
+    clientEdgeTraversalPath: clientEdgeTraversalPath ?? null,
     node: fragment,
     variables,
     owner: request,

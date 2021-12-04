@@ -1,0 +1,94 @@
+==================================== INPUT ====================================
+query ExampleQuery($id: ID!) {
+  node(id: $id) {
+    id
+  }
+}
+
+fragment ExampleFragment on User {
+  id
+}
+
+mutation TestMutation($input: CommentCreateInput!) {
+  commentCreate(input: $input) {
+    comment {
+      id
+    }
+  }
+}
+
+subscription TestSubscription($input: FeedbackLikeInput) {
+  feedbackLikeSubscribe(input: $input) {
+    feedback {
+      id
+    }
+  }
+}
+==================================== OUTPUT ===================================
+export type ExampleQuery$variables = {
+  id: string;
+};
+export type ExampleQuery$data = {
+  readonly node: {
+    readonly id: string;
+  } | null;
+};
+export type ExampleQuery = {
+  variables: ExampleQuery$variables;
+  response: ExampleQuery$data;
+};
+-------------------------------------------------------------------------------
+export type CommentCreateInput = {
+  clientMutationId?: string | null;
+  feedbackId?: string | null;
+  feedback?: CommentfeedbackFeedback | null;
+};
+export type CommentfeedbackFeedback = {
+  comment?: FeedbackcommentComment | null;
+};
+export type FeedbackcommentComment = {
+  feedback?: CommentfeedbackFeedback | null;
+};
+export type TestMutation$variables = {
+  input: CommentCreateInput;
+};
+export type TestMutation$data = {
+  readonly commentCreate: {
+    readonly comment: {
+      readonly id: string;
+    } | null;
+  } | null;
+};
+export type TestMutation = {
+  variables: TestMutation$variables;
+  response: TestMutation$data;
+};
+-------------------------------------------------------------------------------
+export type FeedbackLikeInput = {
+  clientMutationId?: string | null;
+  feedbackId?: string | null;
+};
+export type TestSubscription$variables = {
+  input?: FeedbackLikeInput | null;
+};
+export type TestSubscription$data = {
+  readonly feedbackLikeSubscribe: {
+    readonly feedback: {
+      readonly id: string;
+    } | null;
+  } | null;
+};
+export type TestSubscription = {
+  variables: TestSubscription$variables;
+  response: TestSubscription$data;
+};
+-------------------------------------------------------------------------------
+import { FragmentRefs } from "relay-runtime";
+export type ExampleFragment$data = {
+  readonly id: string;
+  readonly " $fragmentType": "ExampleFragment";
+};
+export type ExampleFragment$key = {
+  readonly " $data"?: ExampleFragment$data;
+  readonly " $fragmentSpreads": FragmentRefs<"ExampleFragment">;
+};

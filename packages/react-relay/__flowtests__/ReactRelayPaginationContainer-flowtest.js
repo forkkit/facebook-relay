@@ -8,13 +8,14 @@
  * @format
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const React = require('react');
+'use strict';
 
 const {
   createContainer: createPaginationContainer,
 } = require('../ReactRelayPaginationContainer');
+const React = require('react');
 const {graphql} = require('relay-runtime');
 
 /**
@@ -27,9 +28,10 @@ const {graphql} = require('relay-runtime');
  * Flow's React support are documented at https://fburl.com/eq7bs81w */
 class FooComponent extends React.Component {
   props: {
-    optionalProp?: {foo: number},
+    optionalProp?: {foo: number, ...},
     defaultProp: string,
     requiredProp: string,
+    ...
   };
   static defaultProps = {
     defaultProp: 'default',
@@ -60,10 +62,15 @@ const Foo = createPaginationContainer(
   {
     viewer: graphql`
       fragment ReactRelayPaginationContainerFlowtest_viewer on Viewer {
-        all_friends(after: $cursor, first: $count) @connection {
-          edges {
-            node {
-              __typename
+        account_user {
+          friends(after: $cursor, first: $count)
+            @connection(
+              key: "ReactRelayPaginationContainerFlowtest_viewer__friends"
+            ) {
+            edges {
+              node {
+                __typename
+              }
             }
           }
         }
@@ -72,7 +79,8 @@ const Foo = createPaginationContainer(
   },
   {
     direction: 'forward',
-    getConnectionFromProps: props => props.viewer.all_friends,
+    getConnectionFromProps: props => props.viewer.account_user.friends,
+    // $FlowFixMe[cannot-spread-interface]
     getFragmentVariables: (vars, totalCount) => ({
       ...vars,
       count: totalCount,

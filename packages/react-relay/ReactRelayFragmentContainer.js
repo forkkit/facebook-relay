@@ -8,36 +8,36 @@
  * @format
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const React = require('react');
-
-const areEqual = require('areEqual');
-const buildReactRelayContainer = require('./buildReactRelayContainer');
-const getRootVariablesForFragments = require('./getRootVariablesForFragments');
-
-const {getContainerName} = require('./ReactRelayContainerUtils');
-const {assertRelayContext} = require('./RelayContext');
-const {
-  createFragmentSpecResolver,
-  getDataIDsFromObject,
-  isScalarAndEqual,
-} = require('relay-runtime');
-
-import type {$RelayProps, GeneratedNodeMap, RelayProp} from './ReactRelayTypes';
+import type {GeneratedNodeMap, RelayProp, $RelayProps} from './ReactRelayTypes';
 import type {
   FragmentMap,
   FragmentSpecResolver,
   RelayContext,
 } from 'relay-runtime';
 
+const buildReactRelayContainer = require('./buildReactRelayContainer');
+const {getContainerName} = require('./ReactRelayContainerUtils');
+const {assertRelayContext} = require('./RelayContext');
+const areEqual = require('areEqual');
+const React = require('react');
+const {
+  createFragmentSpecResolver,
+  getDataIDsFromObject,
+  isScalarAndEqual,
+} = require('relay-runtime');
+
 type ContainerProps = $FlowFixMeProps;
 type ContainerState = {
-  data: {[key: string]: mixed},
+  data: {[key: string]: mixed, ...},
   prevProps: ContainerProps,
   prevPropsContext: RelayContext,
   relayProp: RelayProp,
   resolver: FragmentSpecResolver,
+  ...
 };
 
 /**
@@ -46,7 +46,7 @@ type ContainerState = {
  * updates.
  */
 function createContainerWithFragments<
-  Props: {},
+  Props: {...},
   TComponent: React.ComponentType<Props>,
 >(
   Component: TComponent,
@@ -61,6 +61,7 @@ function createContainerWithFragments<
     constructor(props) {
       super(props);
       const relayContext = assertRelayContext(props.__relayContext);
+      const rootIsQueryRenderer = props.__rootIsQueryRenderer ?? false;
       // Do not provide a subscription/callback here.
       // It is possible for this render to be interrupted or aborted,
       // In which case the subscription would cause a leak.
@@ -70,6 +71,7 @@ function createContainerWithFragments<
         containerName,
         fragments,
         props,
+        rootIsQueryRenderer,
       );
       this.state = {
         data: resolver.resolve(),
@@ -93,6 +95,7 @@ function createContainerWithFragments<
       // This is an unusual pattern, but necessary for this container usecase.
       const {prevProps} = prevState;
       const relayContext = assertRelayContext(nextProps.__relayContext);
+      const rootIsQueryRenderer = nextProps.__rootIsQueryRenderer ?? false;
       const prevIDs = getDataIDsFromObject(fragments, prevProps);
       const nextIDs = getDataIDsFromObject(fragments, nextProps);
       let resolver: FragmentSpecResolver = prevState.resolver;
@@ -115,6 +118,7 @@ function createContainerWithFragments<
           containerName,
           fragments,
           nextProps,
+          rootIsQueryRenderer,
         );
 
         return {
@@ -142,17 +146,17 @@ function createContainerWithFragments<
     }
 
     componentDidMount() {
-      this._subscribeToNewResolver();
-      this._rerenderIfStoreHasChanged();
+      this._subscribeToNewResolverAndRerenderIfStoreHasChanged();
     }
 
     componentDidUpdate(prevProps: ContainerProps, prevState: ContainerState) {
       if (this.state.resolver !== prevState.resolver) {
         prevState.resolver.dispose();
 
-        this._subscribeToNewResolver();
+        this._subscribeToNewResolverAndRerenderIfStoreHasChanged();
+      } else {
+        this._rerenderIfStoreHasChanged();
       }
-      this._rerenderIfStoreHasChanged();
     }
 
     componentWillUnmount() {
@@ -215,16 +219,24 @@ function createContainerWithFragments<
       }
     }
 
-    _subscribeToNewResolver() {
-      const {resolver} = this.state;
+    _subscribeToNewResolverAndRerenderIfStoreHasChanged() {
+      const {data, resolver} = this.state;
+      const maybeNewData = resolver.resolve();
 
       // Event listeners are only safe to add during the commit phase,
       // So they won't leak if render is interrupted or errors.
-      resolver.setCallback(this._handleFragmentDataUpdate);
+      resolver.setCallback(this.props, this._handleFragmentDataUpdate);
+
+      // External values could change between render and commit.
+      // Check for this case, even though it requires an extra store read.
+      if (data !== maybeNewData) {
+        this.setState({data: maybeNewData});
+      }
     }
 
     render() {
-      const {componentRef, __relayContext: _, ...props} = this.props;
+      const {componentRef, __relayContext, __rootIsQueryRenderer, ...props} =
+        this.props;
       return React.createElement(Component, {
         ...props,
         ...this.state.data,
@@ -249,7 +261,7 @@ function getRelayProp(environment) {
  * instance of the container constructed/rendered.
  */
 function createContainer<
-  Props: {},
+  Props: {...},
   Instance,
   TComponent: React.AbstractComponent<Props, Instance>,
 >(
@@ -259,6 +271,7 @@ function createContainer<
   $RelayProps<React$ElementConfig<TComponent>, RelayProp>,
   Instance,
 > {
+  // $FlowFixMe[incompatible-return]
   return buildReactRelayContainer(
     Component,
     fragmentSpec,

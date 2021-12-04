@@ -9,12 +9,17 @@
  * @emails oncall+relay
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
+const RelayNetwork = require('../../network/RelayNetwork');
 const RelayModernEnvironment = require('../RelayModernEnvironment');
 const RelayModernStore = require('../RelayModernStore');
-const RelayNetwork = require('../../network/RelayNetwork');
 const RelayRecordSource = require('../RelayRecordSource');
+const {disallowWarnings} = require('relay-test-utils-internal');
+
+disallowWarnings();
 
 describe('getStore()', () => {
   it('returns the store passed to the constructor', () => {

@@ -8,13 +8,14 @@
  * @format
  */
 
-'use strict';
+// flowlint ambiguous-object-type:error
 
-const React = require('react');
+'use strict';
 
 const {
   createContainer: createRefetchContainer,
 } = require('../ReactRelayRefetchContainer');
+const React = require('react');
 const {graphql} = require('relay-runtime');
 
 /**
@@ -26,9 +27,10 @@ const {graphql} = require('relay-runtime');
  * Flow's React support are documented at https://fburl.com/eq7bs81w */
 class FooComponent extends React.Component {
   props: {
-    optionalProp?: {foo: number},
+    optionalProp?: {foo: number, ...},
     defaultProp: string,
     requiredProp: string,
+    ...
   };
   static defaultProps = {
     defaultProp: 'default',
@@ -59,10 +61,15 @@ const Foo = createRefetchContainer(
   {
     viewer: graphql`
       fragment ReactRelayRefetchContainerFlowtest_viewer on Viewer {
-        all_friends(after: $cursor, first: $count) @connection {
-          edges {
-            node {
-              __typename
+        account_user {
+          friends(after: $cursor, first: $count)
+            @connection(
+              key: "ReactRelayRefetchContainerFlowtest_viewer__friends"
+            ) {
+            edges {
+              node {
+                __typename
+              }
             }
           }
         }

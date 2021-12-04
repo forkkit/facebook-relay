@@ -9,22 +9,23 @@
  * @emails oncall+relay
  */
 
+// flowlint ambiguous-object-type:error
+
 'use strict';
 
-const RelayModernEnvironment = require('../RelayModernEnvironment');
-const RelayModernStore = require('../RelayModernStore');
 const RelayNetwork = require('../../network/RelayNetwork');
-const RelayRecordSource = require('../RelayRecordSource');
-
+const RelayModernEnvironment = require('../RelayModernEnvironment');
 const {
   createOperationDescriptor,
 } = require('../RelayModernOperationDescriptor');
-const {
-  createReaderSelector,
-  createNormalizationSelector,
-} = require('../RelayModernSelector');
+const {createReaderSelector} = require('../RelayModernSelector');
+const RelayModernStore = require('../RelayModernStore');
+const RelayRecordSource = require('../RelayRecordSource');
 const {ROOT_ID} = require('../RelayStoreUtils');
-const {generateAndCompile} = require('relay-test-utils-internal');
+const {getRequest, graphql} = require('relay-runtime');
+const {disallowWarnings} = require('relay-test-utils-internal');
+
+disallowWarnings();
 
 describe('retain()', () => {
   let ParentQuery;
@@ -32,21 +33,24 @@ describe('retain()', () => {
   let operation;
 
   beforeEach(() => {
-    jest.resetModules();
-    ({ParentQuery} = generateAndCompile(`
-        query ParentQuery {
-          me {
-            id
-            name
-          }
-        }
-        fragment ChildFragment on User {
+    graphql`
+      fragment RelayModernEnvironmentRetainTestQueryChildFragment on User {
+        id
+        name
+      }
+    `;
+
+    ParentQuery = getRequest(graphql`
+      query RelayModernEnvironmentRetainTestQuery {
+        me {
           id
           name
         }
-      `));
+      }
+    `);
+
     const source = RelayRecordSource.create();
-    const store = new RelayModernStore(source);
+    const store = new RelayModernStore(source, {gcReleaseBufferSize: 0});
     environment = new RelayModernEnvironment({
       network: RelayNetwork.create(jest.fn()),
       store,
@@ -61,9 +65,7 @@ describe('retain()', () => {
   });
 
   it('retains data when not disposed', () => {
-    environment.retain(
-      createNormalizationSelector(ParentQuery.root, ROOT_ID, {}),
-    );
+    environment.retain(operation);
     const snapshot = environment.lookup(
       createReaderSelector(
         ParentQuery.fragment,
@@ -82,9 +84,8 @@ describe('retain()', () => {
   });
 
   it('releases data when disposed', () => {
-    const {dispose} = environment.retain(
-      createNormalizationSelector(ParentQuery.root, ROOT_ID, {}),
-    );
+    // $FlowFixMe[method-unbinding] added when improving typing for this parameters
+    const {dispose} = environment.retain(operation);
     const selector = createReaderSelector(
       ParentQuery.fragment,
       ROOT_ID,
